@@ -17,8 +17,23 @@ type distributorChannels struct {
 func counting(world [][]byte, x, y int) int {
 	dir := [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
 	counter := 0
+	width := len(world[0])
+	height := len(world)
 	for _, d := range dir {
-		if world[x+d[0]][y+d[1]] == byte(255) {
+		if y+d[0] < 0 {
+			y = height - 1
+		}
+		if x+d[1] < 0 {
+			x = width - 1
+		}
+		if y+d[0] >= height {
+			y = 0
+		}
+		if x+d[1] >= width {
+			x = 0
+		}
+
+		if world[y][x] == byte(255) {
 			counter++
 		}
 	}
@@ -30,16 +45,16 @@ func evolution(world [][]byte) [][]byte {
 	for i := 0; i < len(world); i++ {
 		new_world[i] = make([]byte, len(world[0]))
 	}
-	for x, _ := range world {
-		for y, _ := range world[x] {
+	for y, _ := range world {
+		for x, _ := range world[y] {
 			nums := counting(world, x, y)
 			switch {
 			case nums == 3:
-				new_world[x][y] = byte(255)
+				new_world[y][x] = byte(255)
 			case nums > 3 || nums < 2:
-				new_world[x][y] = byte(0)
+				new_world[y][x] = byte(0)
 			default:
-				new_world[x][y] = world[x][y]
+				new_world[y][x] = world[y][x]
 			}
 
 		}
@@ -72,7 +87,6 @@ func distributor(p Params, c distributorChannels) {
 
 	c.ioCommand <- ioInput
 	filename := fmt.Sprintf("%dx%d", p.ImageWidth, p.ImageHeight)
-	fmt.Println(filename)
 	c.ioFilename <- filename
 
 	for index := 0; index < p.ImageHeight*p.ImageWidth; index++ {
