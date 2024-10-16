@@ -67,7 +67,7 @@ func checker(world [][]byte) []util.Cell {
 	for x, _ := range world {
 		for y, _ := range world[x] {
 			if world[x][y] == byte(255) {
-				result = append(result, util.Cell{x, y})
+				result = append(result, util.Cell{y, x})
 			}
 		}
 	}
