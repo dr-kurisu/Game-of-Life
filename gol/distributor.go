@@ -25,18 +25,21 @@ type countingMatrix struct {
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
 
 func worker(cMatrix *countingMatrix, taskQueue <-chan util.Cell, wg *sync.WaitGroup) {
-	defer wg.Done()
-	task := <-taskQueue
-	height := cMatrix.height
-	width := cMatrix.width
+	for {
+		task := <-taskQueue
+		height := cMatrix.height
+		width := cMatrix.width
 
-	for _, d := range dir {
-		realY := (task.Y + d[0] + height) % height
-		realX := (task.X + d[1] + width) % width
-		cMatrix.mutex.Lock()
-		cMatrix.matrix[realY][realX] += 1
-		cMatrix.mutex.Unlock()
+		for _, d := range dir {
+			realY := (task.Y + d[0] + height) % height
+			realX := (task.X + d[1] + width) % width
+			cMatrix.mutex.Lock()
+			cMatrix.matrix[realY][realX] += 1
+			cMatrix.mutex.Unlock()
+		}
+		wg.Done()
 	}
+
 }
 
 func evolution(p Params, aliveCells []util.Cell) []util.Cell {
@@ -54,7 +57,7 @@ func evolution(p Params, aliveCells []util.Cell) []util.Cell {
 	wg := sync.WaitGroup{}
 	wg.Add(numAlive)
 
-	go func() {
+	go func() { // like a producer
 		for _, cell := range aliveCells {
 			taskQueue <- cell
 		}
@@ -69,7 +72,6 @@ func evolution(p Params, aliveCells []util.Cell) []util.Cell {
 	for _, cell := range aliveCells {
 		cellMap[cell] = true
 	}
-	fmt.Println(result)
 	for y, _ := range cMatrix.matrix {
 		for x, _ := range cMatrix.matrix[y] {
 			if cMatrix.matrix[y][x] == 3 {
