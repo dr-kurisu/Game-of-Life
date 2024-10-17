@@ -2,6 +2,7 @@ package gol
 
 import (
 	"fmt"
+	"sync"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
@@ -14,41 +15,71 @@ type distributorChannels struct {
 	ioInput    <-chan uint8
 }
 
-func counting(world [][]byte, x, y int) int {
-	dir := [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
-	counter := 0
-	width := len(world[0])
-	height := len(world)
-	for _, d := range dir {
-		real_y := (y + d[0] + height) % height
-		real_x := (x + d[1] + width) % width
-
-		if world[real_y][real_x] == byte(255) {
-			counter++
-		}
-	}
-	return counter
+type countingMatrix struct {
+	mutex  sync.Mutex
+	matrix [][]int8
+	height int
+	width  int
 }
 
-func evolution(world [][]byte) [][]byte {
-	new_world := make([][]byte, len(world))
-	for i := 0; i < len(world); i++ {
-		new_world[i] = make([]byte, len(world[0]))
+var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
+
+func worker(cMatrix *countingMatrix, taskQueue <-chan util.Cell, wg *sync.WaitGroup) {
+	defer wg.Done()
+	task := <-taskQueue
+	height := cMatrix.height
+	width := cMatrix.width
+
+	for _, d := range dir {
+		realY := (task.Y + d[0] + height) % height
+		realX := (task.X + d[1] + width) % width
+		cMatrix.mutex.Lock()
+		cMatrix.matrix[realY][realX] += 1
+		cMatrix.mutex.Unlock()
 	}
-	for y, _ := range world {
-		for x, _ := range world[y] {
-			nums := counting(world, x, y)
-			switch {
-			case nums == 3:
-				new_world[y][x] = byte(255)
-			case nums > 3 || nums < 2:
-				new_world[y][x] = byte(0)
-			default:
-				new_world[y][x] = world[y][x]
+}
+
+func evolution(p Params, aliveCells []util.Cell) []util.Cell {
+	matrix := make([][]int8, p.ImageHeight)
+	for i := 0; i < p.ImageHeight; i++ {
+		matrix[i] = make([]int8, p.ImageWidth)
+	}
+	cMatrix := countingMatrix{}
+	cMatrix.matrix = matrix
+	cMatrix.height = p.ImageHeight
+	cMatrix.width = p.ImageWidth
+
+	numAlive := len(aliveCells)
+	taskQueue := make(chan util.Cell, numAlive)
+	wg := sync.WaitGroup{}
+	wg.Add(numAlive)
+
+	go func() {
+		for _, cell := range aliveCells {
+			taskQueue <- cell
+		}
+	}()
+
+	for i := 0; i < p.Threads; i++ {
+		go worker(&cMatrix, taskQueue, &wg)
+	}
+	wg.Wait()
+	result := make([]util.Cell, 0)
+	cellMap := make(map[util.Cell]bool)
+	for _, cell := range aliveCells {
+		cellMap[cell] = true
+	}
+	fmt.Println(result)
+	for y, _ := range cMatrix.matrix {
+		for x, _ := range cMatrix.matrix[y] {
+			if cMatrix.matrix[y][x] == 3 {
+				result = append(result, util.Cell{X: x, Y: y})
+			} else if cMatrix.matrix[y][x] >= 2 && cMatrix.matrix[y][x] <= 3 && cellMap[util.Cell{X: x, Y: y}] {
+				result = append(result, util.Cell{X: x, Y: y})
 			}
 		}
 	}
-	return new_world
+	return result
 }
 
 func checker(world [][]byte) []util.Cell {
@@ -56,7 +87,7 @@ func checker(world [][]byte) []util.Cell {
 	for y, _ := range world {
 		for x, _ := range world[y] {
 			if world[y][x] == byte(255) {
-				result = append(result, util.Cell{x, y})
+				result = append(result, util.Cell{X: x, Y: y})
 			}
 		}
 	}
@@ -69,10 +100,8 @@ func distributor(p Params, c distributorChannels) {
 	for i := 0; i < p.ImageHeight; i++ {
 		world[i] = make([]byte, p.ImageWidth)
 	}
-
 	turn := 0
 	c.events <- StateChange{turn, Executing}
-	// TODO: Execute all turns of the Game of Life.
 
 	c.ioCommand <- ioInput
 	filename := fmt.Sprintf("%dx%d", p.ImageWidth, p.ImageHeight)
@@ -83,12 +112,13 @@ func distributor(p Params, c distributorChannels) {
 	}
 
 	// run evolution until end of turns
+	var aliveCells []util.Cell
+	aliveCells = checker(world)
 	for i := 0; i < p.Turns; i++ {
-		world = evolution(world)
+		aliveCells = evolution(p, aliveCells)
 	}
 
-	// TODO: Report the final state using FinalTurnCompleteEvent.
-	c.events <- FinalTurnComplete{p.Turns, checker(world)}
+	c.events <- FinalTurnComplete{p.Turns, aliveCells}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
