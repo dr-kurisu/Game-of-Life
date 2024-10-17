@@ -20,20 +20,10 @@ func counting(world [][]byte, x, y int) int {
 	width := len(world[0])
 	height := len(world)
 	for _, d := range dir {
-		if y+d[0] < 0 {
-			y = height - 1
-		}
-		if x+d[1] < 0 {
-			x = width - 1
-		}
-		if y+d[0] >= height {
-			y = 0
-		}
-		if x+d[1] >= width {
-			x = 0
-		}
+		real_y := (y + d[0] + height) % height
+		real_x := (x + d[1] + width) % width
 
-		if world[y][x] == byte(255) {
+		if world[real_y][real_x] == byte(255) {
 			counter++
 		}
 	}
@@ -56,7 +46,6 @@ func evolution(world [][]byte) [][]byte {
 			default:
 				new_world[y][x] = world[y][x]
 			}
-
 		}
 	}
 	return new_world
@@ -64,10 +53,10 @@ func evolution(world [][]byte) [][]byte {
 
 func checker(world [][]byte) []util.Cell {
 	result := make([]util.Cell, 0)
-	for x, _ := range world {
-		for y, _ := range world[x] {
-			if world[x][y] == byte(255) {
-				result = append(result, util.Cell{y, x})
+	for y, _ := range world {
+		for x, _ := range world[y] {
+			if world[y][x] == byte(255) {
+				result = append(result, util.Cell{x, y})
 			}
 		}
 	}
