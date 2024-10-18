@@ -24,7 +24,7 @@ type countingMatrix struct {
 
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
 
-func worker(cMatrix *countingMatrix, taskQueue <-chan util.Cell, wg *sync.WaitGroup) {
+func workerQueue(cMatrix *countingMatrix, taskQueue <-chan util.Cell, wg *sync.WaitGroup) {
 	for {
 		task := <-taskQueue
 		height := cMatrix.height
@@ -40,6 +40,63 @@ func worker(cMatrix *countingMatrix, taskQueue <-chan util.Cell, wg *sync.WaitGr
 		wg.Done()
 	}
 
+}
+
+func workerSegment(p Params, world [][]byte, startX, endX, startY, endY int, result [][]chan byte, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for y := startY; y < endY; y++ {
+		for x := startX; x < endX; x++ {
+			counter := 0
+			for _, d := range dir {
+				if world[(y+d[0]+p.ImageHeight)%p.ImageHeight][(x+d[1]+p.ImageWidth)%p.ImageWidth] == byte(255) {
+					counter++
+				}
+			}
+			if counter == 3 {
+				result[y][x] <- byte(255)
+			} else if counter < 2 || counter > 3 {
+				result[y][x] <- byte(0)
+			} else {
+				result[y][x] <- world[y][x]
+			}
+		}
+	}
+
+}
+
+func evolutionSegment(p Params, world [][]byte) [][]byte {
+	result := make([][]chan byte, p.ImageHeight)
+	for i := 0; i < p.ImageHeight; i++ {
+		result[i] = make([]chan byte, p.ImageWidth)
+		for j := 0; j < p.ImageWidth; j++ {
+			result[i][j] = make(chan byte, 1)
+		}
+	}
+
+	y_interval := p.ImageHeight / p.ImageWidth
+	wg := sync.WaitGroup{}
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		startY := i * y_interval
+		endY := (i + 1) * y_interval
+		if i == p.Threads-1 {
+			endY = p.ImageHeight
+		}
+		go workerSegment(p, world, 0, p.ImageWidth, startY, endY, result, &wg)
+	}
+
+	matrix := make([][]byte, p.ImageHeight)
+	for i := 0; i < p.ImageHeight; i++ {
+		matrix[i] = make([]byte, p.ImageWidth)
+	}
+
+	wg.Wait()
+	for i := 0; i < p.ImageHeight; i++ {
+		for j := 0; j < p.ImageWidth; j++ {
+			matrix[i][j] = <-result[i][j]
+		}
+	}
+	return matrix
 }
 
 func evolution(p Params, aliveCells []util.Cell) []util.Cell {
@@ -64,7 +121,7 @@ func evolution(p Params, aliveCells []util.Cell) []util.Cell {
 	}()
 
 	for i := 0; i < p.Threads; i++ {
-		go worker(&cMatrix, taskQueue, &wg)
+		go workerQueue(&cMatrix, taskQueue, &wg)
 	}
 	wg.Wait()
 	result := make([]util.Cell, 0)
@@ -114,11 +171,15 @@ func distributor(p Params, c distributorChannels) {
 	}
 
 	// run evolution until end of turns
-	var aliveCells []util.Cell
-	aliveCells = checker(world)
+	//var aliveCells []util.Cell
+	//aliveCells = checker(world)
+	//for i := 0; i < p.Turns; i++ {
+	//	aliveCells = evolution(p, aliveCells)
+	//}
 	for i := 0; i < p.Turns; i++ {
-		aliveCells = evolution(p, aliveCells)
+		world = evolutionSegment(p, world)
 	}
+	aliveCells := checker(world)
 
 	c.events <- FinalTurnComplete{p.Turns, aliveCells}
 
