@@ -3,6 +3,7 @@ package gol
 import (
 	"fmt"
 	"sync"
+	"time"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
@@ -154,6 +155,39 @@ func checker(world [][]byte, p Params) []util.Cell {
 	return result
 }
 
+func aliveCounter(world [][]byte, p Params) int {
+	result := 0
+	var mutex sync.Mutex
+	var wg sync.WaitGroup
+	averagetest := p.ImageHeight / p.Threads
+	ys := 0
+	ye := averagetest
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		if i == p.Threads-1 {
+			ye = p.ImageHeight
+		}
+		go func(ys, ye int) {
+			defer wg.Done()
+			localResult := 0
+			for y := ys; y < ye; y++ {
+				for x := 0; x < p.ImageWidth; x++ {
+					if world[y][x] == byte(255) {
+						localResult += 1
+					}
+				}
+			}
+			mutex.Lock()
+			result += localResult
+			mutex.Unlock()
+		}(ys, ye)
+		ys += averagetest
+		ye += averagetest
+	}
+	wg.Wait()
+	return result
+}
+
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels) {
 	world := make([][]byte, p.ImageHeight)
@@ -171,10 +205,18 @@ func distributor(p Params, c distributorChannels) {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
 
+	ticker := time.NewTicker(2 * time.Second)
+
 	// run evolution until end of turns
 	for i := 0; i < p.Turns; i++ {
 		cMat := makeCountMat(world, p)
 		world = evolution(cMat, world, p)
+		select {
+		case <-ticker.C:
+			nums := aliveCounter(world, p)
+			c.events <- AliveCellsCount{i + 1, nums}
+		default:
+		}
 	}
 
 	c.events <- FinalTurnComplete{p.Turns, checker(world, p)}

@@ -13,7 +13,8 @@ func Run(p Params, events chan<- Event, keyPresses <-chan rune) {
 
 	//	TODO: Put the missing channels in here.
 	name_chan := make(chan string, 20)
-	input_chan := make(chan byte)
+	input_chan := make(chan byte, 20)
+	output_chan := make(chan byte, 20)
 
 	ioCommand := make(chan ioCommand)
 	ioIdle := make(chan bool)
@@ -22,7 +23,7 @@ func Run(p Params, events chan<- Event, keyPresses <-chan rune) {
 		command:  ioCommand,
 		idle:     ioIdle,
 		filename: name_chan,
-		output:   nil,
+		output:   output_chan,
 		input:    input_chan,
 	}
 	go startIo(p, ioChannels)
@@ -32,7 +33,7 @@ func Run(p Params, events chan<- Event, keyPresses <-chan rune) {
 		ioCommand:  ioCommand,
 		ioIdle:     ioIdle,
 		ioFilename: name_chan,
-		ioOutput:   nil,
+		ioOutput:   output_chan,
 		ioInput:    input_chan,
 	}
 	distributor(p, distributorChannels)
