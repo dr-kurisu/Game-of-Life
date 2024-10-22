@@ -15,141 +15,142 @@ type distributorChannels struct {
 	ioInput    <-chan uint8
 }
 
-type countingMatrix struct {
-	mutex  sync.Mutex
-	matrix [][]int8
-	height int
-	width  int
-}
-
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
 
-func workerQueue(cMatrix *countingMatrix, taskQueue <-chan util.Cell, wg *sync.WaitGroup) {
-	for {
-		task := <-taskQueue
-		height := cMatrix.height
-		width := cMatrix.width
+func makeCountMat(world [][]byte, p Params) [][]int8 {
+	y_interval := p.ImageHeight / p.Threads
 
-		for _, d := range dir {
-			realY := (task.Y + d[0] + height) % height
-			realX := (task.X + d[1] + width) % width
-			cMatrix.mutex.Lock()
-			cMatrix.matrix[realY][realX] += 1
-			cMatrix.mutex.Unlock()
-		}
-		wg.Done()
+	cMats := make([]chan [][]int8, p.Threads)
+	for i := range cMats {
+		cMats[i] = make(chan [][]int8, 1)
 	}
-
-}
-
-func workerSegment(p Params, world [][]byte, startX, endX, startY, endY int, result [][]chan byte, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for y := startY; y < endY; y++ {
-		for x := startX; x < endX; x++ {
-			counter := 0
-			for _, d := range dir {
-				if world[(y+d[0]+p.ImageHeight)%p.ImageHeight][(x+d[1]+p.ImageWidth)%p.ImageWidth] == byte(255) {
-					counter++
-				}
-			}
-			if counter == 3 {
-				result[y][x] <- byte(255)
-			} else if counter < 2 || counter > 3 {
-				result[y][x] <- byte(0)
-			} else {
-				result[y][x] <- world[y][x]
-			}
-		}
-	}
-
-}
-
-func evolutionSegment(p Params, world [][]byte) [][]byte {
-	result := make([][]chan byte, p.ImageHeight)
-	for i := 0; i < p.ImageHeight; i++ {
-		result[i] = make([]chan byte, p.ImageWidth)
-		for j := 0; j < p.ImageWidth; j++ {
-			result[i][j] = make(chan byte, 1)
-		}
-	}
-
-	y_interval := p.ImageHeight / p.ImageWidth
-	wg := sync.WaitGroup{}
+	var wg sync.WaitGroup
 	wg.Add(p.Threads)
+
 	for i := 0; i < p.Threads; i++ {
 		startY := i * y_interval
-		endY := (i + 1) * y_interval
+		endY := startY + y_interval
 		if i == p.Threads-1 {
 			endY = p.ImageHeight
 		}
-		go workerSegment(p, world, 0, p.ImageWidth, startY, endY, result, &wg)
+		i := i // intermediate var
+		go func() {
+			defer wg.Done()
+			countWorker(startY, endY, world, cMats[i], p)
+		}()
 	}
-
-	matrix := make([][]byte, p.ImageHeight)
-	for i := 0; i < p.ImageHeight; i++ {
-		matrix[i] = make([]byte, p.ImageWidth)
-	}
-
 	wg.Wait()
-	for i := 0; i < p.ImageHeight; i++ {
-		for j := 0; j < p.ImageWidth; j++ {
-			matrix[i][j] = <-result[i][j]
-		}
+	result := make([][]int8, p.ImageHeight)
+	for i := range result {
+		result[i] = make([]int8, p.ImageHeight)
 	}
-	return matrix
-}
 
-func evolution(p Params, aliveCells []util.Cell) []util.Cell {
-	matrix := make([][]int8, p.ImageHeight)
-	for i := 0; i < p.ImageHeight; i++ {
-		matrix[i] = make([]int8, p.ImageWidth)
-	}
-	cMatrix := countingMatrix{}
-	cMatrix.matrix = matrix
-	cMatrix.height = p.ImageHeight
-	cMatrix.width = p.ImageWidth
-
-	numAlive := len(aliveCells)
-	taskQueue := make(chan util.Cell, numAlive)
-	wg := sync.WaitGroup{}
-	wg.Add(numAlive)
-
-	go func() { // like a producer
-		for _, cell := range aliveCells {
-			taskQueue <- cell
-		}
-	}()
-
+	// Combine Counting Matrix
 	for i := 0; i < p.Threads; i++ {
-		go workerQueue(&cMatrix, taskQueue, &wg)
-	}
-	wg.Wait()
-	result := make([]util.Cell, 0)
-	cellMap := make(map[util.Cell]bool)
-	for _, cell := range aliveCells {
-		cellMap[cell] = true
-	}
-	for y, _ := range cMatrix.matrix {
-		for x, _ := range cMatrix.matrix[y] {
-			if cMatrix.matrix[y][x] == 3 {
-				result = append(result, util.Cell{X: x, Y: y})
-			} else if cMatrix.matrix[y][x] >= 2 && cMatrix.matrix[y][x] <= 3 && cellMap[util.Cell{X: x, Y: y}] {
-				result = append(result, util.Cell{X: x, Y: y})
+		startY := i * y_interval
+		cMat := <-cMats[i]
+		for y, _ := range cMat {
+			for x, _ := range cMat[y] {
+				result[(y-1+startY+p.ImageHeight)%p.ImageHeight][x] += cMat[y][x]
 			}
 		}
 	}
 	return result
 }
 
-func checker(world [][]byte) []util.Cell {
-	result := make([]util.Cell, 0)
-	for y, _ := range world {
-		for x, _ := range world[y] {
+func countWorker(startY, endY int, world [][]byte, cMatChan chan [][]int8, p Params) {
+	// function to make counting matrix
+	cMat := make([][]int8, endY-startY+2) // more rows in first line and last line
+	for j := 0; j < endY-startY+2; j++ {
+		cMat[j] = make([]int8, p.ImageWidth)
+	}
+	for y := startY; y < endY; y++ {
+		for x := 0; x < p.ImageWidth; x++ {
 			if world[y][x] == byte(255) {
-				result = append(result, util.Cell{X: x, Y: y})
+				for _, d := range dir {
+					cMat[y-startY+d[0]+1][(x+d[1]+p.ImageWidth)%p.ImageWidth] += 1
+				}
 			}
 		}
 	}
+	cMatChan <- cMat
+}
+
+func evolution(cMat [][]int8, world [][]byte, p Params) [][]byte {
+	// Given a counting matrix return a list of alive cells
+	y_interval := p.ImageHeight / p.Threads
+
+	aliveCells := make([]util.Cell, 0)
+
+	wg := sync.WaitGroup{}
+
+	wg.Add(p.Threads)
+
+	var mutex sync.Mutex
+
+	for i := 0; i < p.Threads; i++ {
+		startY := i * y_interval
+		endY := (i + 1) * y_interval
+		if i == p.Threads-1 {
+			endY = p.ImageHeight
+		}
+		go func() {
+			defer wg.Done()
+			localAliveCells := []util.Cell{}
+			for y := startY; y < endY; y++ {
+				for x := 0; x < p.ImageWidth; x++ {
+					if cMat[y][x] == 3 || cMat[y][x] == 2 && world[y][x] == byte(255) {
+						localAliveCells = append(localAliveCells, util.Cell{X: x, Y: y})
+					}
+				}
+			}
+			mutex.Lock()
+			aliveCells = append(aliveCells, localAliveCells...)
+			mutex.Unlock()
+		}()
+	}
+	wg.Wait()
+	result := make([][]byte, p.ImageHeight)
+	for i := range result {
+		result[i] = make([]byte, p.ImageWidth)
+	}
+	for _, cell := range aliveCells {
+		result[cell.Y][cell.X] = byte(255)
+	}
+
+	return result
+}
+
+func checker(world [][]byte, p Params) []util.Cell {
+	result := make([]util.Cell, 0)
+	var mutex sync.Mutex
+	var wg sync.WaitGroup
+	averagetest := p.ImageHeight / p.Threads
+	ys := 0
+	ye := averagetest
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		if i == p.Threads-1 {
+			ye = p.ImageHeight
+		}
+		go func(ys, ye int) {
+			defer wg.Done()
+			localResult := make([]util.Cell, 0)
+			for y := ys; y < ye; y++ {
+				for x := 0; x < p.ImageWidth; x++ {
+					if world[y][x] == byte(255) {
+						localResult = append(localResult, util.Cell{X: x, Y: y})
+					}
+				}
+			}
+			mutex.Lock()
+			result = append(result, localResult...)
+			mutex.Unlock()
+		}(ys, ye)
+		ys += averagetest
+		ye += averagetest
+	}
+	wg.Wait()
 	return result
 }
 
@@ -171,17 +172,12 @@ func distributor(p Params, c distributorChannels) {
 	}
 
 	// run evolution until end of turns
-	//var aliveCells []util.Cell
-	//aliveCells = checker(world)
-	//for i := 0; i < p.Turns; i++ {
-	//	aliveCells = evolution(p, aliveCells)
-	//}
 	for i := 0; i < p.Turns; i++ {
-		world = evolutionSegment(p, world)
+		cMat := makeCountMat(world, p)
+		world = evolution(cMat, world, p)
 	}
-	aliveCells := checker(world)
 
-	c.events <- FinalTurnComplete{p.Turns, aliveCells}
+	c.events <- FinalTurnComplete{p.Turns, checker(world, p)}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
