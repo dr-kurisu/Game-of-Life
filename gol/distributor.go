@@ -188,6 +188,17 @@ func aliveCounter(world [][]byte, p Params) int {
 	return result
 }
 
+func output(world [][]byte, c *distributorChannels, p Params) {
+	c.ioCommand <- ioOutput
+	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, p.Turns)
+	c.ioFilename <- filename
+	for i := 0; i < p.ImageHeight; i++ {
+		for j := 0; j < p.ImageWidth; j++ {
+			c.ioOutput <- world[i][j]
+		}
+	}
+}
+
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels) {
 	world := make([][]byte, p.ImageHeight)
@@ -218,6 +229,7 @@ func distributor(p Params, c distributorChannels) {
 		default:
 		}
 	}
+	output(world, &c, p)
 
 	c.events <- FinalTurnComplete{p.Turns, checker(world, p)}
 
