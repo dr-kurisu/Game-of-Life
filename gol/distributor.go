@@ -228,6 +228,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	for i := 0; i < p.ImageHeight; i++ {
 		world[i] = make([]byte, p.ImageWidth)
 	}
+
 	turn := 0
 	c.events <- StateChange{turn, Executing}
 
@@ -244,6 +245,8 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	save := make(chan bool, 1)
 	ticker := time.NewTicker(2 * time.Second)
 	quit := false
+
+	go keyBoardDetection(keyPresses, exit, pause, save)
 
 	finalTurns := p.Turns
 
@@ -262,9 +265,14 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			fmt.Println("Pausing")
 			c.events <- StateChange{i + 1, Paused}
 			<-pause
+			c.events <- StateChange{i + 1, Executing}
 			fmt.Println("Resuming")
 		case <-save: // deal with saving
 			filename := output(world, &c, p, i+1)
+			c.ioCommand <- ioCheckIdle
+			select {
+			case <-c.ioIdle:
+			}
 			c.events <- ImageOutputComplete{CompletedTurns: i + 1, Filename: filename}
 		default:
 		}
@@ -273,6 +281,10 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		}
 	}
 	filename = output(world, &c, p, finalTurns)
+	c.ioCommand <- ioCheckIdle
+	select {
+	case <-c.ioIdle:
+	}
 	c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: filename}
 
 	c.events <- FinalTurnComplete{p.Turns, checker(world, p)}
