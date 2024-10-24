@@ -261,11 +261,31 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		case <-exit: // deal with exit
 			finalTurns = i + 1
 			quit = true
-		case <-pause: // deal with pausing
-			fmt.Println("Pausing")
+		case <-pause:
+			// deal with pausing
 			c.events <- StateChange{i + 1, Paused}
-			<-pause
-			c.events <- StateChange{i + 1, Executing}
+			q := false
+			for {
+				select {
+				case <-exit: // deal with exit
+					finalTurns = i + 1
+					quit = true
+				case <-save: // deal with saving
+					filename := output(world, &c, p, i+1)
+					c.ioCommand <- ioCheckIdle
+					select {
+					case <-c.ioIdle:
+					}
+					c.events <- ImageOutputComplete{CompletedTurns: i + 1, Filename: filename}
+				case <-pause:
+					c.events <- StateChange{i + 1, Executing}
+					q = true
+				}
+				if q || quit {
+					break
+				}
+			}
+
 			fmt.Println("Resuming")
 		case <-save: // deal with saving
 			filename := output(world, &c, p, i+1)
