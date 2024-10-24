@@ -16,6 +16,12 @@ type distributorChannels struct {
 	ioInput    <-chan uint8
 }
 
+type presentWorld struct {
+	mutex sync.Mutex
+	turns int
+	world [][]byte
+}
+
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
 
 func makeCountMat(world [][]byte, p Params) [][]int8 {
@@ -126,9 +132,9 @@ func checker(world [][]byte, p Params) []util.Cell {
 	result := make([]util.Cell, 0)
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
-	averagetest := p.ImageHeight / p.Threads
+	y_interval := p.ImageHeight / p.Threads
 	ys := 0
-	ye := averagetest
+	ye := y_interval
 	wg.Add(p.Threads)
 	for i := 0; i < p.Threads; i++ {
 		if i == p.Threads-1 {
@@ -148,8 +154,8 @@ func checker(world [][]byte, p Params) []util.Cell {
 			result = append(result, localResult...)
 			mutex.Unlock()
 		}(ys, ye)
-		ys += averagetest
-		ye += averagetest
+		ys += y_interval
+		ye += y_interval
 	}
 	wg.Wait()
 	return result
@@ -159,9 +165,9 @@ func aliveCounter(world [][]byte, p Params) int {
 	result := 0
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
-	averagetest := p.ImageHeight / p.Threads
+	y_interval := p.ImageHeight / p.Threads
 	ys := 0
-	ye := averagetest
+	ye := y_interval
 	wg.Add(p.Threads)
 	for i := 0; i < p.Threads; i++ {
 		if i == p.Threads-1 {
@@ -181,26 +187,43 @@ func aliveCounter(world [][]byte, p Params) int {
 			result += localResult
 			mutex.Unlock()
 		}(ys, ye)
-		ys += averagetest
-		ye += averagetest
+		ys += y_interval
+		ye += y_interval
 	}
 	wg.Wait()
 	return result
 }
 
-func output(world [][]byte, c *distributorChannels, p Params) {
+func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 	c.ioCommand <- ioOutput
-	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, p.Turns)
+	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turn)
 	c.ioFilename <- filename
 	for i := 0; i < p.ImageHeight; i++ {
 		for j := 0; j < p.ImageWidth; j++ {
 			c.ioOutput <- world[i][j]
 		}
 	}
+	return filename
+}
+
+func keyBoardDetection(keyPresses <-chan rune, exit chan bool, pause chan bool, save chan bool) {
+	for {
+		key := <-keyPresses
+		switch key {
+		case 's':
+			save <- true
+		case 'q':
+			exit <- true
+		case 'p':
+			pause <- true
+		default:
+			panic("Wrong input from keyboard")
+		}
+	}
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
-func distributor(p Params, c distributorChannels) {
+func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	world := make([][]byte, p.ImageHeight)
 	for i := 0; i < p.ImageHeight; i++ {
 		world[i] = make([]byte, p.ImageWidth)
@@ -216,7 +239,13 @@ func distributor(p Params, c distributorChannels) {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
 
+	exit := make(chan bool, 1)
+	pause := make(chan bool, 1)
+	save := make(chan bool, 1)
 	ticker := time.NewTicker(2 * time.Second)
+	quit := false
+
+	finalTurns := p.Turns
 
 	// run evolution until end of turns
 	for i := 0; i < p.Turns; i++ {
@@ -226,10 +255,25 @@ func distributor(p Params, c distributorChannels) {
 		case <-ticker.C:
 			nums := aliveCounter(world, p)
 			c.events <- AliveCellsCount{i + 1, nums}
+		case <-exit: // deal with exit
+			finalTurns = i + 1
+			quit = true
+		case <-pause: // deal with pausing
+			fmt.Println("Pausing")
+			c.events <- StateChange{i + 1, Paused}
+			<-pause
+			fmt.Println("Resuming")
+		case <-save: // deal with saving
+			filename := output(world, &c, p, i+1)
+			c.events <- ImageOutputComplete{CompletedTurns: i + 1, Filename: filename}
 		default:
 		}
+		if quit {
+			break
+		}
 	}
-	output(world, &c, p)
+	filename = output(world, &c, p, finalTurns)
+	c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: filename}
 
 	c.events <- FinalTurnComplete{p.Turns, checker(world, p)}
 
