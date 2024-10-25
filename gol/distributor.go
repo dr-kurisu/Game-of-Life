@@ -106,6 +106,7 @@ func evolution(cMat [][]int8, world [][]byte, p Params) [][]byte {
 			localAliveCells := []util.Cell{}
 			for y := startY; y < endY; y++ {
 				for x := 0; x < p.ImageWidth; x++ {
+
 					if cMat[y][x] == 3 || cMat[y][x] == 2 && world[y][x] == byte(255) {
 						localAliveCells = append(localAliveCells, util.Cell{X: x, Y: y})
 					}
@@ -230,6 +231,8 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	}
 
 	turn := 0
+	aliveCells := checker(world, p)
+	c.events <- CellsFlipped{Cells: aliveCells}
 	c.events <- StateChange{turn, Executing}
 
 	c.ioCommand <- ioInput
@@ -254,6 +257,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	for i := 0; i < p.Turns; i++ {
 		cMat := makeCountMat(world, p)
 		world = evolution(cMat, world, p)
+		c.events <- TurnComplete{i + 1}
 		select {
 		case <-ticker.C:
 			nums := aliveCounter(world, p)
