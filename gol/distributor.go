@@ -2,8 +2,13 @@ package gol
 
 import (
 	"fmt"
+	"log"
+	"net/rpc"
+	"uk.ac.bris.cs/gameoflife/communication"
 	"uk.ac.bris.cs/gameoflife/util"
 )
+
+var GolWorld [][]byte
 
 type distributorChannels struct {
 	events     chan<- Event
@@ -12,54 +17,6 @@ type distributorChannels struct {
 	ioFilename chan<- string
 	ioOutput   chan<- uint8
 	ioInput    <-chan uint8
-}
-
-func counting(world [][]byte, x, y int) int {
-	dir := [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
-	counter := 0
-	width := len(world[0])
-	height := len(world)
-	for _, d := range dir {
-		if y+d[0] < 0 {
-			y = height - 1
-		}
-		if x+d[1] < 0 {
-			x = width - 1
-		}
-		if y+d[0] >= height {
-			y = 0
-		}
-		if x+d[1] >= width {
-			x = 0
-		}
-
-		if world[y][x] == byte(255) {
-			counter++
-		}
-	}
-	return counter
-}
-
-func evolution(world [][]byte) [][]byte {
-	new_world := make([][]byte, len(world))
-	for i := 0; i < len(world); i++ {
-		new_world[i] = make([]byte, len(world[0]))
-	}
-	for y, _ := range world {
-		for x, _ := range world[y] {
-			nums := counting(world, x, y)
-			switch {
-			case nums == 3:
-				new_world[y][x] = byte(255)
-			case nums > 3 || nums < 2:
-				new_world[y][x] = byte(0)
-			default:
-				new_world[y][x] = world[y][x]
-			}
-
-		}
-	}
-	return new_world
 }
 
 func checker(world [][]byte) []util.Cell {
@@ -73,6 +30,12 @@ func checker(world [][]byte) []util.Cell {
 	}
 	return result
 }
+func comWithServer(client *rpc.Client, world [][]byte, p Params) {
+	send := communication.ReceiveFromServer{P: p, CurrentWorld: world}
+	res := new(communication.SendToClient)
+	client.Call("server.connectionHandler", send, res)
+	GolWorld = res.World
+}
 
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels) {
@@ -80,24 +43,24 @@ func distributor(p Params, c distributorChannels) {
 	for i := 0; i < p.ImageHeight; i++ {
 		world[i] = make([]byte, p.ImageWidth)
 	}
-
 	turn := 0
 	c.events <- StateChange{turn, Executing}
 	// TODO: Execute all turns of the Game of Life.
-
 	c.ioCommand <- ioInput
 	filename := fmt.Sprintf("%dx%d", p.ImageWidth, p.ImageHeight)
 	c.ioFilename <- filename
-
 	for index := 0; index < p.ImageHeight*p.ImageWidth; index++ {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
-
-	// run evolution until end of turns
-	for i := 0; i < p.Turns; i++ {
-		world = evolution(world)
+	// initialise the client
+	server := "" // Ip to be confirmed
+	client, err := rpc.Dial("tcp", server)
+	if err != nil { // error happens
+		log.Fatal("dialing:", err)
 	}
-
+	defer client.Close()
+	comWithServer(client, world, p)
+	world = GolWorld
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 	c.events <- FinalTurnComplete{p.Turns, checker(world)}
 

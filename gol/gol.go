@@ -13,7 +13,7 @@ func Run(p Params, events chan<- Event, keyPresses <-chan rune) {
 
 	//	TODO: Put the missing channels in here.
 	name_chan := make(chan string, 20)
-	input_chan := make(chan byte)
+	input_chan := make(chan byte, 20)
 
 	ioCommand := make(chan ioCommand)
 	ioIdle := make(chan bool)
