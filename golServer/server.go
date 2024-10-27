@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net"
 	"net/rpc"
 	"uk.ac.bris.cs/gameoflife/communication"
@@ -58,39 +59,24 @@ func evolution(world [][]byte) [][]byte {
 	return new_world
 }
 
-//func checker(world [][]byte) []util.Cell {
-//	result := make([]util.Cell, 0)
-//	for x, _ := range world {
-//		for y, _ := range world[x] {
-//			if world[x][y] == byte(255) {
-//				result = append(result, util.Cell{y, x})
-//			}
-//		}
-//	}
-//	return result
-//}
-
-func (a *GolAttribute) connectionHandler(conn net.Conn, server communication.ReceiveFromServer, client communication.SendToClient) {
+func (a *GolAttribute) connectionHandler(server communication.ReceiveFromServer, reply *communication.SendToClient) {
 	p := server.P
-	world := make([][]byte, p.ImageHeight)
-	for i := 0; i < p.ImageHeight; i++ {
-		world[i] = make([]byte, p.ImageWidth)
-	}
+	world := server.CurrentWorld
 	// run evolution until end of turns
 	for i := 0; i < p.Turns; i++ {
 		world = evolution(world)
 	}
-	return
+	reply.World = world
 }
 
 //It's the sever, used to listen and pass the argus to client by channel
 func main() {
-	Address := flag.String("port", "8030", "client Port")
+	Address := flag.String("port", ":8030", "client Port")
 	flag.Parse()
 	rpc.Register(GolAttribute{})
 	listener, _ := net.Listen("tcp", *Address)
+	fmt.Println("Server is listening on port", *Address)
 	conn, _ := listener.Accept()
 	defer conn.Close()
 	rpc.Accept(listener)
-
 }
