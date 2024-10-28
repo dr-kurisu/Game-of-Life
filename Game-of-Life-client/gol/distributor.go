@@ -3,6 +3,8 @@ package gol
 import (
 	"fmt"
 	"net/rpc"
+	"sync"
+	"time"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
@@ -28,7 +30,39 @@ func checker(world [][]byte) []util.Cell {
 	}
 	return result
 }
-func comWithServer(client *rpc.Client, world [][]byte, p Params) [][]byte {
+func aliveCounter(world [][]byte, p Params) int {
+	result := 0
+	var mutex sync.Mutex
+	var wg sync.WaitGroup
+	y_interval := p.ImageHeight / p.Threads
+	ys := 0
+	ye := y_interval
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		if i == p.Threads-1 {
+			ye = p.ImageHeight
+		}
+		go func(ys, ye int) {
+			defer wg.Done()
+			localResult := 0
+			for y := ys; y < ye; y++ {
+				for x := 0; x < p.ImageWidth; x++ {
+					if world[y][x] == byte(255) {
+						localResult += 1
+					}
+				}
+			}
+			mutex.Lock()
+			result += localResult
+			mutex.Unlock()
+		}(ys, ye)
+		ys += y_interval
+		ye += y_interval
+	}
+	wg.Wait()
+	return result
+}
+func comWithServer(client *rpc.Client, world [][]byte, p Params, c distributorChannels) [][]byte {
 	send := ReceiveFromServer{P: p, CurrentWorld: world}
 	res := SendToClient{}
 	res.World = make([][]byte, p.ImageHeight)
@@ -38,10 +72,36 @@ func comWithServer(client *rpc.Client, world [][]byte, p Params) [][]byte {
 			res.World[i][j] = world[i][j]
 		}
 	}
-	if len(checker(res.World)) == 0 {
-		panic("23455")
+
+	result := make([][]byte, p.ImageHeight)
+	for i := 0; i < p.ImageHeight; i++ {
+		result[i] = make([]byte, p.ImageWidth)
 	}
-	client.Call("Operator.ConnectionHandler", send, &res)
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	done := make(chan *rpc.Call, 1)
+	for i := 0; i < p.Turns; i++ {
+		client.Go("Operator.Connection", send, &res, done)
+		quit := false
+		for {
+			select {
+			case <-ticker.C:
+				c.events <- AliveCellsCount{CompletedTurns: i, CellsCount: aliveCounter(send.CurrentWorld, p)}
+			case <-done:
+				quit = true
+			default:
+			}
+			if quit {
+				for q := 0; q < p.ImageHeight; q++ {
+					for a := 0; a < p.ImageWidth; a++ {
+						send.CurrentWorld[q][a] = res.World[q][a]
+					}
+				}
+				break
+			}
+		}
+	}
 	return res.World
 }
 
@@ -71,7 +131,7 @@ func distributor(p Params, c distributorChannels) {
 	defer client.Close()
 	// creat a ticker for every 2 seconds
 	//ticker := time.NewTicker(2 * time.Second)
-	world = comWithServer(client, world, p)
+	world = comWithServer(client, world, p, c)
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 	c.events <- FinalTurnComplete{p.Turns, checker(world)}
 

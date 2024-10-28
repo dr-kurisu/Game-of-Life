@@ -46,7 +46,8 @@ func evolution(world [][]byte) [][]byte {
 	return newWorld
 }
 
-func (a *Operator) ConnectionHandler(request ReceiveFromServer, reply *SendToClient) error {
+func (a *Operator) Connection(request ReceiveFromServer, reply *SendToClient) error {
+	fmt.Println("round Start")
 	p := request.P
 	reply.World = make([][]byte, p.ImageHeight)
 	for i := 0; i < p.ImageHeight; i++ {
@@ -59,11 +60,8 @@ func (a *Operator) ConnectionHandler(request ReceiveFromServer, reply *SendToCli
 			world[i][j] = request.CurrentWorld[i][j]
 		}
 	}
-
 	// run evolution until end of turns
-	for i := 0; i < p.Turns; i++ {
-		world = evolution(world)
-	}
+	world = evolution(world)
 
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
