@@ -49,7 +49,7 @@ func (io *ioState) writePgmImage() {
 	defer file.Close()
 
 	_, _ = file.WriteString("P5\n")
-	//_, _ = file.WriteString("# PGM file writer by pnmmodules (https://github.com/owainkenwayucl/pnmmodules).\n")
+	_, _ = file.WriteString("# PGM file writer by pnmmodules (https://github.com/owainkenwayucl/pnmmodules).\n")
 	_, _ = file.WriteString(strconv.Itoa(io.params.ImageWidth))
 	_, _ = file.WriteString(" ")
 	_, _ = file.WriteString(strconv.Itoa(io.params.ImageHeight))
@@ -61,10 +61,11 @@ func (io *ioState) writePgmImage() {
 	for i := range world {
 		world[i] = make([]byte, io.params.ImageWidth)
 	}
-
 	for y := 0; y < io.params.ImageHeight; y++ {
 		for x := 0; x < io.params.ImageWidth; x++ {
+			fmt.Printf("Waiting for [%d][%d]\n", y, x)
 			val := <-io.channels.output
+			fmt.Println("channel output complete")
 			//if val != 0 {
 			//	fmt.Println(x, y)
 			//}
@@ -129,7 +130,6 @@ func startIo(p Params, c ioChannels) {
 		params:   p,
 		channels: c,
 	}
-
 	for command := range io.channels.command {
 		// Block and wait for requests from the distributor
 		switch command {

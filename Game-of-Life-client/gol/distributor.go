@@ -8,8 +8,6 @@ import (
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
-var GolWorld [][]byte
-
 type distributorChannels struct {
 	events     chan<- Event
 	ioCommand  chan<- ioCommand
@@ -105,6 +103,19 @@ func comWithServer(client *rpc.Client, world [][]byte, p Params, c distributorCh
 	return res.World
 }
 
+func output(world [][]byte, c *distributorChannels, p Params, turn int) {
+	c.ioCommand <- ioOutput
+	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turn)
+	c.ioFilename <- filename
+	for i := 0; i < p.ImageHeight; i++ {
+		for j := 0; j < p.ImageWidth; j++ {
+			fmt.Printf("Sending world[%d][%d] = %d\n", i, j, world[i][j])
+			c.ioOutput <- world[i][j]
+			fmt.Println("channel input complete")
+		}
+	}
+}
+
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels) {
 	world := make([][]byte, p.ImageHeight)
@@ -129,9 +140,10 @@ func distributor(p Params, c distributorChannels) {
 		fmt.Println("Wrong conn")
 	}
 	defer client.Close()
-	// creat a ticker for every 2 seconds
-	//ticker := time.NewTicker(2 * time.Second)
+	// communicate with server and get the response
 	world = comWithServer(client, world, p, c)
+	// output as pgm file
+	output(world, &c, p, p.Turns)
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 	c.events <- FinalTurnComplete{p.Turns, checker(world)}
 
