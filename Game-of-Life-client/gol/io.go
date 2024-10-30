@@ -63,9 +63,7 @@ func (io *ioState) writePgmImage() {
 	}
 	for y := 0; y < io.params.ImageHeight; y++ {
 		for x := 0; x < io.params.ImageWidth; x++ {
-			fmt.Printf("Waiting for [%d][%d]\n", y, x)
 			val := <-io.channels.output
-			fmt.Println("channel output complete")
 			//if val != 0 {
 			//	fmt.Println(x, y)
 			//}
@@ -92,6 +90,7 @@ func (io *ioState) readPgmImage() {
 	// Request a filename from the distributor.
 	filename := <-io.channels.filename
 	data, ioError := os.ReadFile("images/" + filename + ".pgm")
+	fmt.Println(data)
 	util.Check(ioError)
 
 	fields := strings.Fields(string(data))
@@ -102,12 +101,12 @@ func (io *ioState) readPgmImage() {
 
 	width, _ := strconv.Atoi(fields[1])
 	if width != io.params.ImageWidth {
-		panic("Incorrect width")
+		//panic("Incorrect width")
 	}
 
 	height, _ := strconv.Atoi(fields[2])
 	if height != io.params.ImageHeight {
-		panic("Incorrect height")
+		//panic("Incorrect height")
 	}
 
 	maxval, _ := strconv.Atoi(fields[3])

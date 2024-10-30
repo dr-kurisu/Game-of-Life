@@ -75,7 +75,7 @@ func readAliveCells(path string, width, height int) []util.Cell {
 	if fields[0] != "P5" {
 		panic("Not a pgm file")
 	}
-
+	fmt.Println("fields:", fields)
 	imageWidth, _ := strconv.Atoi(fields[1])
 	if imageWidth != width {
 		panic("Incorrect width")

@@ -103,17 +103,16 @@ func comWithServer(client *rpc.Client, world [][]byte, p Params, c distributorCh
 	return res.World
 }
 
-func output(world [][]byte, c *distributorChannels, p Params, turn int) {
+func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 	c.ioCommand <- ioOutput
 	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turn)
 	c.ioFilename <- filename
 	for i := 0; i < p.ImageHeight; i++ {
 		for j := 0; j < p.ImageWidth; j++ {
-			fmt.Printf("Sending world[%d][%d] = %d\n", i, j, world[i][j])
 			c.ioOutput <- world[i][j]
-			fmt.Println("channel input complete")
 		}
 	}
+	return filename
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
@@ -143,7 +142,13 @@ func distributor(p Params, c distributorChannels) {
 	// communicate with server and get the response
 	world = comWithServer(client, world, p, c)
 	// output as pgm file
-	output(world, &c, p, p.Turns)
+	finalTurn := p.Turns
+	filename = output(world, &c, p, finalTurn)
+	c.ioCommand <- ioCheckIdle
+	select {
+	case <-c.ioIdle:
+		c.events <- ImageOutputComplete{CompletedTurns: finalTurn, Filename: filename}
+	}
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 	c.events <- FinalTurnComplete{p.Turns, checker(world)}
 
