@@ -12,15 +12,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: List Directory Structure
+      run: ls -R  # List all files and directories recursively
+
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
         go-version: '1.23'
 
     - name: Build
-      working-directory: Game-of-Life-client/  # Set the working directory here
+      working-directory: Game-of-Life-client/  # Adjust this path if necessary based on the output of ls -R
       run: go build
 
     - name: Test
-      working-directory: Game-of-Life-client/  # Set the working directory here
+      working-directory: Game-of-Life-client/  # Adjust this path if necessary based on the output of ls -R
       run: go test -v ./...
