@@ -129,7 +129,6 @@ func distributor(p Params, c distributorChannels) {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
 	turn := 0
-	c.events <- StateChange{turn, Executing}
 	// TODO: Execute all turns of the Game of Life.
 	// initialise the client
 	server := "localhost:8030" // Ip to be confirmed
@@ -140,14 +139,15 @@ func distributor(p Params, c distributorChannels) {
 	}
 	defer client.Close()
 	// communicate with server and get the response
+	c.events <- StateChange{turn, Executing}
 	world = comWithServer(client, world, p, c)
 	// output as pgm file
 	finalTurn := p.Turns
-	filename = output(world, &c, p, finalTurn)
+	outputFileName := output(world, &c, p, finalTurn)
 	c.ioCommand <- ioCheckIdle
 	select {
 	case <-c.ioIdle:
-		c.events <- ImageOutputComplete{CompletedTurns: finalTurn, Filename: filename}
+		c.events <- ImageOutputComplete{CompletedTurns: finalTurn, Filename: outputFileName}
 	}
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 	c.events <- FinalTurnComplete{p.Turns, checker(world)}

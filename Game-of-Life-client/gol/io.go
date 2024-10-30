@@ -49,7 +49,7 @@ func (io *ioState) writePgmImage() {
 	defer file.Close()
 
 	_, _ = file.WriteString("P5\n")
-	_, _ = file.WriteString("# PGM file writer by pnmmodules (https://github.com/owainkenwayucl/pnmmodules).\n")
+	//_, _ = file.WriteString("# PGM file writer by pnmmodules (https://github.com/owainkenwayucl/pnmmodules).\n")
 	_, _ = file.WriteString(strconv.Itoa(io.params.ImageWidth))
 	_, _ = file.WriteString(" ")
 	_, _ = file.WriteString(strconv.Itoa(io.params.ImageHeight))
@@ -61,6 +61,7 @@ func (io *ioState) writePgmImage() {
 	for i := range world {
 		world[i] = make([]byte, io.params.ImageWidth)
 	}
+
 	for y := 0; y < io.params.ImageHeight; y++ {
 		for x := 0; x < io.params.ImageWidth; x++ {
 			val := <-io.channels.output
@@ -89,8 +90,8 @@ func (io *ioState) readPgmImage() {
 
 	// Request a filename from the distributor.
 	filename := <-io.channels.filename
+
 	data, ioError := os.ReadFile("images/" + filename + ".pgm")
-	fmt.Println(data)
 	util.Check(ioError)
 
 	fields := strings.Fields(string(data))
@@ -101,12 +102,12 @@ func (io *ioState) readPgmImage() {
 
 	width, _ := strconv.Atoi(fields[1])
 	if width != io.params.ImageWidth {
-		//panic("Incorrect width")
+		panic("Incorrect width")
 	}
 
 	height, _ := strconv.Atoi(fields[2])
 	if height != io.params.ImageHeight {
-		//panic("Incorrect height")
+		panic("Incorrect height")
 	}
 
 	maxval, _ := strconv.Atoi(fields[3])
@@ -129,6 +130,7 @@ func startIo(p Params, c ioChannels) {
 		params:   p,
 		channels: c,
 	}
+
 	for command := range io.channels.command {
 		// Block and wait for requests from the distributor
 		switch command {
