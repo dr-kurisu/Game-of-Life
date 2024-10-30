@@ -137,6 +137,7 @@ func distributor(p Params, c distributorChannels) {
 	if client == nil {
 		fmt.Println("Wrong conn")
 	}
+
 	defer client.Close()
 	// communicate with server and get the response
 	c.events <- StateChange{turn, Executing}
