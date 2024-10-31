@@ -47,7 +47,6 @@ func evolution(world [][]byte) [][]byte {
 }
 
 func (a *Operator) Connection(request ReceiveFromServer, reply *SendToClient) error {
-	fmt.Println("round Start")
 	p := request.P
 	reply.World = make([][]byte, p.ImageHeight)
 	for i := 0; i < p.ImageHeight; i++ {

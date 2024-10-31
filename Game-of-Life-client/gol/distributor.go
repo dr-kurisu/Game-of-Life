@@ -60,7 +60,7 @@ func aliveCounter(world [][]byte, p Params) int {
 	wg.Wait()
 	return result
 }
-func comWithServer(client *rpc.Client, world [][]byte, p Params, c distributorChannels) [][]byte {
+func comWithServer(client *rpc.Client, world [][]byte, p Params) [][]byte {
 	send := ReceiveFromServer{P: p, CurrentWorld: world}
 	res := SendToClient{}
 	res.World = make([][]byte, p.ImageHeight)
@@ -70,34 +70,10 @@ func comWithServer(client *rpc.Client, world [][]byte, p Params, c distributorCh
 			res.World[i][j] = world[i][j]
 		}
 	}
-
-	result := make([][]byte, p.ImageHeight)
-	for i := 0; i < p.ImageHeight; i++ {
-		result[i] = make([]byte, p.ImageWidth)
-	}
-
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	done := make(chan *rpc.Call, 1)
-	for i := 0; i < p.Turns; i++ {
-		client.Go("Operator.Connection", send, &res, done)
-		quit := false
-		for {
-			select {
-			case <-ticker.C:
-				c.events <- AliveCellsCount{CompletedTurns: i, CellsCount: aliveCounter(send.CurrentWorld, p)}
-			case <-done:
-				quit = true
-			default:
-			}
-			if quit {
-				for q := 0; q < p.ImageHeight; q++ {
-					for a := 0; a < p.ImageWidth; a++ {
-						send.CurrentWorld[q][a] = res.World[q][a]
-					}
-				}
-				break
-			}
+	client.Call("Operator.Connection", send, &res)
+	for q := 0; q < p.ImageHeight; q++ {
+		for a := 0; a < p.ImageWidth; a++ {
+			send.CurrentWorld[q][a] = res.World[q][a]
 		}
 	}
 	return res.World
@@ -114,9 +90,24 @@ func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 	}
 	return filename
 }
+func keyBoardDetection(keyPresses <-chan rune, exit chan bool, pause chan bool, save chan bool) {
+	for {
+		key := <-keyPresses
+		switch key {
+		case 's':
+			save <- true
+		case 'q':
+			exit <- true
+		case 'p':
+			pause <- true
+		default:
+			panic("Wrong input from keyboard")
+		}
+	}
+}
 
 // distributor divides the work between workers and interacts with other goroutines.
-func distributor(p Params, c distributorChannels) {
+func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	world := make([][]byte, p.ImageHeight)
 	for i := 0; i < p.ImageHeight; i++ {
 		world[i] = make([]byte, p.ImageWidth)
@@ -139,16 +130,68 @@ func distributor(p Params, c distributorChannels) {
 	}
 
 	defer client.Close()
+	exit := make(chan bool, 1)
+	pause := make(chan bool, 1)
+	save := make(chan bool, 1)
+	ticker := time.NewTicker(2 * time.Second)
+	quit := false
+	finalTurns := p.Turns
+	go keyBoardDetection(keyPresses, exit, pause, save)
 	// communicate with server and get the response
 	c.events <- StateChange{turn, Executing}
-	world = comWithServer(client, world, p, c)
+	for i := 0; i < p.Turns; i++ {
+		world = comWithServer(client, world, p)
+		select {
+		case <-exit:
+			finalTurns = i + 1
+			quit = true
+		case <-ticker.C:
+			c.events <- AliveCellsCount{CompletedTurns: i + 1, CellsCount: aliveCounter(world, p)}
+		case <-pause:
+			c.events <- StateChange{i, Paused}
+			q := false
+			for {
+				select {
+				case <-exit: // deal with exit
+					finalTurns = i + 1
+					quit = true
+				case <-save: // deal with saving
+					filename := output(world, &c, p, i+1)
+					c.ioCommand <- ioCheckIdle
+					select {
+					case <-c.ioIdle:
+					}
+					c.events <- ImageOutputComplete{CompletedTurns: i + 1, Filename: filename}
+				case <-pause:
+					c.events <- StateChange{i + 1, Executing}
+					q = true
+				}
+				if q || quit {
+					break
+				}
+			}
+		case <-exit:
+			finalTurns = i + 1
+			quit = true
+		case <-save: // deal with saving
+			filename := output(world, &c, p, i+1)
+			c.ioCommand <- ioCheckIdle
+			select {
+			case <-c.ioIdle:
+			}
+			c.events <- ImageOutputComplete{CompletedTurns: i + 1, Filename: filename}
+		default:
+		}
+		if quit {
+			break
+		}
+	}
 	// output as pgm file
-	finalTurn := p.Turns
-	outputFileName := output(world, &c, p, finalTurn)
+	outputFileName := output(world, &c, p, finalTurns)
 	c.ioCommand <- ioCheckIdle
 	select {
 	case <-c.ioIdle:
-		c.events <- ImageOutputComplete{CompletedTurns: finalTurn, Filename: outputFileName}
+		c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: outputFileName}
 	}
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 	c.events <- FinalTurnComplete{p.Turns, checker(world)}
