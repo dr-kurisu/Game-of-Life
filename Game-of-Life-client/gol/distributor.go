@@ -16,6 +16,12 @@ type distributorChannels struct {
 	ioOutput   chan<- uint8
 	ioInput    <-chan uint8
 }
+type controlChannels struct {
+	pause  chan bool
+	quit   chan bool
+	save   chan bool
+	ticker *time.Ticker
+}
 
 func checker(world [][]byte) []util.Cell {
 	result := make([]util.Cell, 0)
@@ -90,20 +96,55 @@ func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 	}
 	return filename
 }
-func keyBoardDetection(keyPresses <-chan rune, exit chan bool, pause chan bool, save chan bool) {
+func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
 	for {
 		key := <-keyPresses
 		switch key {
 		case 's':
-			save <- true
+			controlChan.save <- true
 		case 'q':
-			exit <- true
+			controlChan.quit <- true
 		case 'p':
-			pause <- true
+			controlChan.pause <- true
 		default:
 			panic("Wrong input from keyboard")
 		}
 	}
+}
+func handlingEvent(controlChan *controlChannels, c distributorChannels, finalTurns *int, world [][]byte, p Params, round int) bool {
+	quit := true
+	pause := false
+	for {
+		select {
+		case <-controlChan.quit:
+			*finalTurns = round + 1
+			return true
+		case <-controlChan.ticker.C:
+			c.events <- AliveCellsCount{CompletedTurns: round + 1, CellsCount: aliveCounter(world, p)}
+		case <-controlChan.pause:
+			pause = !pause
+			if pause {
+				c.events <- StateChange{round, Paused}
+				quit = false
+			} else {
+				c.events <- StateChange{round + 1, Executing}
+				quit = true
+			}
+		case <-controlChan.save: // deal with saving
+			filename := output(world, &c, p, round+1)
+			c.ioCommand <- ioCheckIdle
+			select {
+			case <-c.ioIdle:
+			}
+			c.events <- ImageOutputComplete{CompletedTurns: round + 1, Filename: filename}
+		default:
+		}
+		if quit {
+			break
+		}
+	}
+	return false
+
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
@@ -119,6 +160,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	for index := 0; index < p.ImageHeight*p.ImageWidth; index++ {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
+	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool), time.NewTicker(2 * time.Second)}
 	turn := 0
 	// TODO: Execute all turns of the Game of Life.
 	// initialise the client
@@ -128,63 +170,19 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	if client == nil {
 		fmt.Println("Wrong conn")
 	}
-
 	defer client.Close()
-	exit := make(chan bool, 1)
-	pause := make(chan bool, 1)
-	save := make(chan bool, 1)
-	ticker := time.NewTicker(2 * time.Second)
-	quit := false
 	finalTurns := p.Turns
-	go keyBoardDetection(keyPresses, exit, pause, save)
+	go keyBoardDetection(keyPresses, controlChan)
+	Gamequit := false
 	// communicate with server and get the response
 	c.events <- StateChange{turn, Executing}
 	for i := 0; i < p.Turns; i++ {
 		world = comWithServer(client, world, p)
-		select {
-		case <-exit:
-			finalTurns = i + 1
-			quit = true
-		case <-ticker.C:
-			c.events <- AliveCellsCount{CompletedTurns: i + 1, CellsCount: aliveCounter(world, p)}
-		case <-pause:
-			c.events <- StateChange{i, Paused}
-			q := false
-			for {
-				select {
-				case <-exit: // deal with exit
-					finalTurns = i + 1
-					quit = true
-				case <-save: // deal with saving
-					filename := output(world, &c, p, i+1)
-					c.ioCommand <- ioCheckIdle
-					select {
-					case <-c.ioIdle:
-					}
-					c.events <- ImageOutputComplete{CompletedTurns: i + 1, Filename: filename}
-				case <-pause:
-					c.events <- StateChange{i + 1, Executing}
-					q = true
-				}
-				if q || quit {
-					break
-				}
-			}
-		case <-exit:
-			finalTurns = i + 1
-			quit = true
-		case <-save: // deal with saving
-			filename := output(world, &c, p, i+1)
-			c.ioCommand <- ioCheckIdle
-			select {
-			case <-c.ioIdle:
-			}
-			c.events <- ImageOutputComplete{CompletedTurns: i + 1, Filename: filename}
-		default:
-		}
-		if quit {
+		Gamequit = handlingEvent(&controlChan, c, &finalTurns, world, p, i)
+		if Gamequit {
 			break
 		}
+
 	}
 	// output as pgm file
 	outputFileName := output(world, &c, p, finalTurns)
