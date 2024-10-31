@@ -16,10 +16,11 @@ type distributorChannels struct {
 	ioInput    <-chan uint8
 }
 
-type presentWorld struct {
-	mutex sync.Mutex
-	turns int
-	world [][]byte
+type controlChannels struct {
+	pause  chan bool
+	quit   chan bool
+	save   chan bool
+	ticker *time.Ticker
 }
 
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
@@ -125,7 +126,6 @@ func evolution(cMat [][]int8, world [][]byte, p Params) [][]byte {
 	for _, cell := range aliveCells {
 		result[cell.Y][cell.X] = byte(255)
 	}
-
 	return result
 }
 
@@ -207,19 +207,62 @@ func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 	return filename
 }
 
-func keyBoardDetection(keyPresses <-chan rune, exit chan bool, pause chan bool, save chan bool) {
+func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
 	for {
 		key := <-keyPresses
 		switch key {
 		case 's':
-			save <- true
+			controlChan.save <- true
 		case 'q':
-			exit <- true
+
+			controlChan.quit <- true
 		case 'p':
-			pause <- true
+			controlChan.pause <- true
 		default:
 			panic("Wrong input from keyboard")
 		}
+	}
+}
+
+func handlingEvent(world [][]byte, round int, controlChan *controlChannels, c distributorChannels, finalTurns *int, p Params) bool {
+	quit := true
+	pause := false
+	for {
+		select {
+		case <-controlChan.ticker.C:
+			nums := aliveCounter(world, p)
+			c.events <- AliveCellsCount{round + 1, nums}
+		case <-controlChan.quit: // deal with exit
+			*finalTurns = round + 1
+			return true
+		case <-controlChan.pause:
+			pause = !pause
+			if pause { // deal with pausing
+				fmt.Println("----------Paused------------")
+				c.events <- StateChange{round + 1, Paused}
+				quit = false
+			} else { // deal with resuming
+				fmt.Println("----------Resumed------------")
+				c.events <- StateChange{round + 1, Executing}
+				quit = true
+			}
+		case <-controlChan.save: // deal with saving
+			filename := output(world, &c, p, round+1)
+			waitOutputComplete(c)
+			c.events <- ImageOutputComplete{CompletedTurns: round + 1, Filename: filename}
+		default:
+		}
+		if quit {
+			break
+		}
+	}
+	return false
+}
+
+func waitOutputComplete(c distributorChannels) {
+	c.ioCommand <- ioCheckIdle
+	select {
+	case <-c.ioIdle:
 	}
 }
 
@@ -243,13 +286,10 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
 
-	exit := make(chan bool, 1)
-	pause := make(chan bool, 1)
-	save := make(chan bool, 1)
-	ticker := time.NewTicker(2 * time.Second)
-	quit := false
+	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool, 1), time.NewTicker(2 * time.Second)}
+	gameQuit := false
 
-	go keyBoardDetection(keyPresses, exit, pause, save)
+	go keyBoardDetection(keyPresses, controlChan)
 
 	finalTurns := p.Turns
 
@@ -258,57 +298,13 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		cMat := makeCountMat(world, p)
 		world = evolution(cMat, world, p)
 		c.events <- TurnComplete{i + 1}
-		select {
-		case <-ticker.C:
-			nums := aliveCounter(world, p)
-			c.events <- AliveCellsCount{i + 1, nums}
-		case <-exit: // deal with exit
-			finalTurns = i + 1
-			quit = true
-		case <-pause:
-			// deal with pausing
-			c.events <- StateChange{i + 1, Paused}
-			q := false
-			for {
-				select {
-				case <-exit: // deal with exit
-					finalTurns = i + 1
-					quit = true
-				case <-save: // deal with saving
-					filename := output(world, &c, p, i+1)
-					c.ioCommand <- ioCheckIdle
-					select {
-					case <-c.ioIdle:
-					}
-					c.events <- ImageOutputComplete{CompletedTurns: i + 1, Filename: filename}
-				case <-pause:
-					c.events <- StateChange{i + 1, Executing}
-					q = true
-				}
-				if q || quit {
-					break
-				}
-			}
-
-			fmt.Println("Resuming")
-		case <-save: // deal with saving
-			filename := output(world, &c, p, i+1)
-			c.ioCommand <- ioCheckIdle
-			select {
-			case <-c.ioIdle:
-			}
-			c.events <- ImageOutputComplete{CompletedTurns: i + 1, Filename: filename}
-		default:
-		}
-		if quit {
+		gameQuit = handlingEvent(world, i, &controlChan, c, &finalTurns, p)
+		if gameQuit {
 			break
 		}
 	}
 	filename = output(world, &c, p, finalTurns)
-	c.ioCommand <- ioCheckIdle
-	select {
-	case <-c.ioIdle:
-	}
+	waitOutputComplete(c)
 	c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: filename}
 
 	c.events <- FinalTurnComplete{p.Turns, checker(world, p)}
