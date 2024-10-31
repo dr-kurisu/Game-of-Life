@@ -84,7 +84,7 @@ func countWorker(startY, endY int, world [][]byte, cMatChan chan [][]int8, p Par
 	cMatChan <- cMat
 }
 
-func evolution(cMat [][]int8, world [][]byte, p Params) [][]byte {
+func evolution(cMat [][]int8, world [][]byte, p Params, c distributorChannels, turns int) [][]byte {
 	// Given a counting matrix return a list of alive cells
 	y_interval := p.ImageHeight / p.Threads
 
@@ -107,7 +107,9 @@ func evolution(cMat [][]int8, world [][]byte, p Params) [][]byte {
 			localAliveCells := []util.Cell{}
 			for y := startY; y < endY; y++ {
 				for x := 0; x < p.ImageWidth; x++ {
-
+					if cMat[y][x] != 3 && cMat[y][x] != 2 && world[y][x] == byte(255) || world[y][x] == byte(0) && cMat[y][x] == 3 {
+						c.events <- CellFlipped{turns, util.Cell{X: x, Y: y}}
+					}
 					if cMat[y][x] == 3 || cMat[y][x] == 2 && world[y][x] == byte(255) {
 						localAliveCells = append(localAliveCells, util.Cell{X: x, Y: y})
 					}
@@ -272,9 +274,6 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	}
 
 	turn := 0
-	aliveCells := checker(world, p)
-	c.events <- CellsFlipped{Cells: aliveCells}
-	c.events <- StateChange{turn, Executing}
 
 	c.ioCommand <- ioInput
 	filename := fmt.Sprintf("%dx%d", p.ImageWidth, p.ImageHeight)
@@ -283,6 +282,9 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	for index := 0; index < p.ImageHeight*p.ImageWidth; index++ {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
+	aliveCells := checker(world, p)
+	c.events <- CellsFlipped{0, aliveCells}
+	c.events <- StateChange{turn, Executing}
 
 	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool, 1), time.NewTicker(2 * time.Second)}
 	gameQuit := false
@@ -294,7 +296,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	// run evolution until end of turns
 	for i := 0; i < p.Turns; i++ {
 		cMat := makeCountMat(world, p)
-		world = evolution(cMat, world, p)
+		world = evolution(cMat, world, p, c, i)
 		c.events <- TurnComplete{i + 1}
 		gameQuit = handlingEvent(world, i, &controlChan, c, &finalTurns, p)
 		if gameQuit {
