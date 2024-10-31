@@ -238,11 +238,9 @@ func handlingEvent(world [][]byte, round int, controlChan *controlChannels, c di
 		case <-controlChan.pause:
 			pause = !pause
 			if pause { // deal with pausing
-				fmt.Println("----------Paused------------")
 				c.events <- StateChange{round + 1, Paused}
 				quit = false
 			} else { // deal with resuming
-				fmt.Println("----------Resumed------------")
 				c.events <- StateChange{round + 1, Executing}
 				quit = true
 			}
