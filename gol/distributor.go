@@ -3,7 +3,6 @@ package gol
 import (
 	"fmt"
 	"sync"
-	"time"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
@@ -16,118 +15,62 @@ type distributorChannels struct {
 	ioInput    <-chan uint8
 }
 
-type controlChannels struct {
-	pause  chan bool
-	quit   chan bool
-	save   chan bool
-	ticker *time.Ticker
-}
-
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
 
-func makeCountMat(world [][]byte, p Params) [][]int8 {
-	y_interval := p.ImageHeight / p.Threads
-
-	cMats := make([]chan [][]int8, p.Threads)
-	for i := range cMats {
-		cMats[i] = make(chan [][]int8, 1)
+func worker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
+	defer wg.Done()
+	interval := len(partResult)
+	width := len(partResult[0])
+	cMat := make([][]uint8, interval)
+	for i := range cMat {
+		cMat[i] = make([]uint8, width)
 	}
-	var wg sync.WaitGroup
-	wg.Add(p.Threads)
-
-	for i := 0; i < p.Threads; i++ {
-		startY := i * y_interval
-		endY := startY + y_interval
-		if i == p.Threads-1 {
-			endY = p.ImageHeight
-		}
-		i := i // intermediate var
-		go func() {
-			defer wg.Done()
-			countWorker(startY, endY, world, cMats[i], p)
-		}()
-	}
-	wg.Wait()
-	result := make([][]int8, p.ImageHeight)
-	for i := range result {
-		result[i] = make([]int8, p.ImageHeight)
-	}
-
-	// Combine Counting Matrix
-	for i := 0; i < p.Threads; i++ {
-		startY := i * y_interval
-		cMat := <-cMats[i]
-		for y, _ := range cMat {
-			for x, _ := range cMat[y] {
-				result[(y-1+startY+p.ImageHeight)%p.ImageHeight][x] += cMat[y][x]
-			}
-		}
-	}
-	return result
-}
-
-func countWorker(startY, endY int, world [][]byte, cMatChan chan [][]int8, p Params) {
-	// function to make counting matrix
-	cMat := make([][]int8, endY-startY+2) // more rows in first line and last line
-	for j := 0; j < endY-startY+2; j++ {
-		cMat[j] = make([]int8, p.ImageWidth)
-	}
-	for y := startY; y < endY; y++ {
-		for x := 0; x < p.ImageWidth; x++ {
-			if world[y][x] == byte(255) {
-				for _, d := range dir {
-					cMat[y-startY+d[0]+1][(x+d[1]+p.ImageWidth)%p.ImageWidth] += 1
+	for y := 0; y < interval; y++ {
+		for x := 0; x < width; x++ {
+			for _, d := range dir {
+				if partWorld[y+d[0]+1][(x+d[1]+width)%width] == byte(255) {
+					cMat[y][x] += byte(1)
 				}
 			}
 		}
 	}
-	cMatChan <- cMat
+	for y := 0; y < interval; y++ {
+		for x := 0; x < width; x++ {
+			if cMat[y][x] == 3 || cMat[y][x] == 2 && partWorld[y][x] == byte(255) {
+				partResult[y][x] = byte(255)
+			}
+		}
+	}
 }
 
-func evolution(cMat [][]int8, world [][]byte, p Params, c distributorChannels, turns int) [][]byte {
-	// Given a counting matrix return a list of alive cells
-	y_interval := p.ImageHeight / p.Threads
-
-	aliveCells := make([]util.Cell, 0)
-
-	wg := sync.WaitGroup{}
-
-	wg.Add(p.Threads)
-
-	var mutex sync.Mutex
-
-	for i := 0; i < p.Threads; i++ {
-		startY := i * y_interval
-		endY := (i + 1) * y_interval
-		if i == p.Threads-1 {
-			endY = p.ImageHeight
-		}
-		go func() {
-			defer wg.Done()
-			localAliveCells := []util.Cell{}
-			for y := startY; y < endY; y++ {
-				for x := 0; x < p.ImageWidth; x++ {
-					if cMat[y][x] != 3 && cMat[y][x] != 2 && world[y][x] == byte(255) || world[y][x] == byte(0) && cMat[y][x] == 3 {
-						c.events <- CellFlipped{turns, util.Cell{X: x, Y: y}}
-					}
-					if cMat[y][x] == 3 || cMat[y][x] == 2 && world[y][x] == byte(255) {
-						localAliveCells = append(localAliveCells, util.Cell{X: x, Y: y})
-					}
-				}
-			}
-			mutex.Lock()
-			aliveCells = append(aliveCells, localAliveCells...)
-			mutex.Unlock()
-		}()
-	}
-	wg.Wait()
+func centralDistributor(world [][]byte, p Params) [][]byte {
+	yInterval := p.ImageHeight / p.Threads
 	result := make([][]byte, p.ImageHeight)
-	for i := range result {
+	for i := 0; i < p.ImageHeight; i++ {
 		result[i] = make([]byte, p.ImageWidth)
 	}
-	for _, cell := range aliveCells {
-		result[cell.Y][cell.X] = byte(255)
+	// wg used to control each thread
+	wg := sync.WaitGroup{}
+	wg.Add(p.Threads)
+
+	for i := 0; i < p.Threads; i++ {
+		startY := i * yInterval
+		endY := (i + 1) * yInterval
+		// deal with the last thread
+		if i == p.Threads-1 {
+			endY = p.ImageHeight
+		}
+		partResult := result[startY:endY]
+		partWorld := make([][]byte, 0)
+		// deal with start and medium
+		for offset := 0; offset < endY-startY+2; offset++ {
+			partWorld = append(partWorld, world[(offset+startY-1+p.ImageHeight)%p.ImageHeight])
+		}
+		//fmt.Println(startY, endY)
+		//fmt.Println("length result, world: ", len(partResult), ", ", len(partWorld))
+		go worker(partWorld, partResult, &wg)
 	}
+	wg.Wait()
 	return result
 }
 
@@ -164,108 +107,6 @@ func checker(world [][]byte, p Params) []util.Cell {
 	return result
 }
 
-func aliveCounter(world [][]byte, p Params) int {
-	result := 0
-	var mutex sync.Mutex
-	var wg sync.WaitGroup
-	y_interval := p.ImageHeight / p.Threads
-	ys := 0
-	ye := y_interval
-	wg.Add(p.Threads)
-	for i := 0; i < p.Threads; i++ {
-		if i == p.Threads-1 {
-			ye = p.ImageHeight
-		}
-		go func(ys, ye int) {
-			defer wg.Done()
-			localResult := 0
-			for y := ys; y < ye; y++ {
-				for x := 0; x < p.ImageWidth; x++ {
-					if world[y][x] == byte(255) {
-						localResult += 1
-					}
-				}
-			}
-			mutex.Lock()
-			result += localResult
-			mutex.Unlock()
-		}(ys, ye)
-		ys += y_interval
-		ye += y_interval
-	}
-	wg.Wait()
-	return result
-}
-
-func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
-	c.ioCommand <- ioOutput
-	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turn)
-	c.ioFilename <- filename
-	for i := 0; i < p.ImageHeight; i++ {
-		for j := 0; j < p.ImageWidth; j++ {
-			c.ioOutput <- world[i][j]
-		}
-	}
-	return filename
-}
-
-func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
-	for {
-		key := <-keyPresses
-		switch key {
-		case 's':
-			controlChan.save <- true
-		case 'q':
-
-			controlChan.quit <- true
-		case 'p':
-			controlChan.pause <- true
-		default:
-			panic("Wrong input from keyboard")
-		}
-	}
-}
-
-func handlingEvent(world [][]byte, round int, controlChan *controlChannels, c distributorChannels, finalTurns *int, p Params) bool {
-	quit := true
-	pause := false
-	for {
-		select {
-		case <-controlChan.ticker.C:
-			nums := aliveCounter(world, p)
-			c.events <- AliveCellsCount{round + 1, nums}
-		case <-controlChan.quit: // deal with exit
-			*finalTurns = round + 1
-			return true
-		case <-controlChan.pause:
-			pause = !pause
-			if pause { // deal with pausing
-				c.events <- StateChange{round + 1, Paused}
-				quit = false
-			} else { // deal with resuming
-				c.events <- StateChange{round + 1, Executing}
-				quit = true
-			}
-		case <-controlChan.save: // deal with saving
-			filename := output(world, &c, p, round+1)
-			waitOutputComplete(c)
-			c.events <- ImageOutputComplete{CompletedTurns: round + 1, Filename: filename}
-		default:
-		}
-		if quit {
-			break
-		}
-	}
-	return false
-}
-
-func waitOutputComplete(c distributorChannels) {
-	c.ioCommand <- ioCheckIdle
-	select {
-	case <-c.ioIdle:
-	}
-}
-
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	world := make([][]byte, p.ImageHeight)
@@ -286,26 +127,10 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	c.events <- CellsFlipped{0, aliveCells}
 	c.events <- StateChange{turn, Executing}
 
-	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool, 1), time.NewTicker(2 * time.Second)}
-	gameQuit := false
-
-	go keyBoardDetection(keyPresses, controlChan)
-
-	finalTurns := p.Turns
-
 	// run evolution until end of turns
 	for i := 0; i < p.Turns; i++ {
-		cMat := makeCountMat(world, p)
-		world = evolution(cMat, world, p, c, i)
-		c.events <- TurnComplete{i + 1}
-		gameQuit = handlingEvent(world, i, &controlChan, c, &finalTurns, p)
-		if gameQuit {
-			break
-		}
+		world = centralDistributor(world, p)
 	}
-	filename = output(world, &c, p, finalTurns)
-	waitOutputComplete(c)
-	c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: filename}
 
 	c.events <- FinalTurnComplete{p.Turns, checker(world, p)}
 
