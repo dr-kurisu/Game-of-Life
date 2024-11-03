@@ -21,22 +21,18 @@ func worker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
 	defer wg.Done()
 	interval := len(partResult)
 	width := len(partResult[0])
-	cMat := make([][]uint8, interval)
-	for i := range cMat {
-		cMat[i] = make([]uint8, width)
-	}
 	for y := 0; y < interval; y++ {
 		for x := 0; x < width; x++ {
 			for _, d := range dir {
 				if partWorld[y+d[0]+1][(x+d[1]+width)%width] == byte(255) {
-					cMat[y][x] += byte(1)
+					partResult[y][x] += 1
 				}
 			}
 		}
 	}
 	for y := 0; y < interval; y++ {
 		for x := 0; x < width; x++ {
-			if cMat[y][x] == 3 || cMat[y][x] == 2 && partWorld[y][x] == byte(255) {
+			if partResult[y][x] == byte(3) || (partResult[y][x] == byte(2) && partWorld[y+1][x] == byte(255)) {
 				partResult[y][x] = byte(255)
 			}
 		}
@@ -66,8 +62,6 @@ func centralDistributor(world [][]byte, p Params) [][]byte {
 		for offset := 0; offset < endY-startY+2; offset++ {
 			partWorld = append(partWorld, world[(offset+startY-1+p.ImageHeight)%p.ImageHeight])
 		}
-		//fmt.Println(startY, endY)
-		//fmt.Println("length result, world: ", len(partResult), ", ", len(partWorld))
 		go worker(partWorld, partResult, &wg)
 	}
 	wg.Wait()
