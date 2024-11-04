@@ -3,6 +3,7 @@ package gol
 import (
 	"fmt"
 	"sync"
+	"time"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
@@ -15,9 +16,16 @@ type distributorChannels struct {
 	ioInput    <-chan uint8
 }
 
+type controlChannels struct {
+	pause  chan bool
+	quit   chan bool
+	save   chan bool
+	ticker *time.Ticker
+}
+
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
 
-func worker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
+func worker(partWorld [][]byte, partResult [][]byte, c distributorChannels, wg *sync.WaitGroup) {
 	defer wg.Done()
 	interval := len(partResult)
 	width := len(partResult[0])
@@ -35,7 +43,6 @@ func worker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
 			if partResult[y][x] == byte(3) || (partResult[y][x] == byte(2) && partWorld[y+1][x] == byte(255)) {
 				partResult[y][x] = byte(255)
 			}
-			// do not have to set result back to byte(0)
 		}
 	}
 }
@@ -62,60 +69,177 @@ func singleThreadWorker(world, result [][]byte) {
 }
 
 func smallThreadWorker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
-	height := len(partResult)
-	width := len(partResult[0])
-	defer wg.Done()
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			if partWorld[y][x] == byte(255) {
-				for _, d := range dir {
-					partResult[(y+d[0]+height)%height][(x+d[1]+width)%width] += 1
-				}
-			}
-		}
-	}
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			if partResult[y][x] == byte(3) || (partResult[y][x] == byte(2) && partWorld[y+1][x] == byte(255)) {
-				partResult[y][x] = byte(255)
-			}
+
+}
+
+func haloExchangeWorker(partWorld, partResult [][]byte, request chan util.Cell, respone chan util.Cell) {
+}
+
+func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
+	for {
+		key := <-keyPresses
+		switch key {
+		case 's':
+			controlChan.save <- true
+		case 'q':
+
+			controlChan.quit <- true
+		case 'p':
+			controlChan.pause <- true
+		default:
+			panic("Wrong input from keyboard")
 		}
 	}
 }
 
-func centralDistributor(world [][]byte, p Params) [][]byte {
+func cellFlipHandling(world [][]byte, result [][]byte, p Params, c distributorChannels, turn int) {
+	var wg sync.WaitGroup
 	yInterval := p.ImageHeight / p.Threads
+	ys := 0
+	ye := yInterval
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		if i == p.Threads-1 {
+			ye = p.ImageHeight
+		}
+		go func(ys, ye int) {
+			defer wg.Done()
+			for y := ys; y < ye; y++ {
+				for x := 0; x < p.ImageWidth; x++ {
+					if world[y][x] != byte(255) && result[y][x] == byte(255) || world[y][x] == byte(255) && result[y][x] != byte(255) {
+						c.events <- CellFlipped{CompletedTurns: turn, Cell: util.Cell{X: x, Y: y}}
+					}
+				}
+			}
+		}(ys, ye)
+		ys += yInterval
+		ye += yInterval
+	}
+	wg.Wait()
+}
+
+func centralDistributor(world [][]byte, p Params, c distributorChannels, turn int) [][]byte {
+	//yInterval := p.ImageHeight / p.Threads
 	result := make([][]byte, p.ImageHeight)
 	for i := 0; i < p.ImageHeight; i++ {
 		result[i] = make([]byte, p.ImageWidth)
 	}
+
 	// wg used to control each thread
 	wg := sync.WaitGroup{}
 	wg.Add(p.Threads)
 
 	// deal with small threads
-	if p.Threads == 1 {
+	if p.Threads > 0 {
 		singleThreadWorker(world, result)
-	} else if p.Threads < 1 {
-		// 用原本的result加上额外的两行，最后合并额外的两行
-	} else {
-		for i := 0; i < p.Threads; i++ {
-			startY := i * yInterval
-			endY := (i + 1) * yInterval
-			// deal with the last thread
-			if i == p.Threads-1 {
-				endY = p.ImageHeight
-			}
-			partResult := result[startY:endY]
-			partWorld := make([][]byte, 0)
-			// deal with start and medium
-			for offset := 0; offset < endY-startY+2; offset++ {
-				partWorld = append(partWorld, world[(offset+startY-1+p.ImageHeight)%p.ImageHeight])
-			}
-			go worker(partWorld, partResult, &wg)
-		}
-		wg.Wait()
+		//} else if p.Threads < 1 {
+		//	// 用原本的result加上额外的两行，最后合并额外的两行
+		//} else {
+		//	for i := 0; i < p.Threads; i++ {
+		//		startY := i * yInterval
+		//		endY := (i + 1) * yInterval
+		//		// deal with the last thread
+		//		if i == p.Threads-1 {
+		//			endY = p.ImageHeight
+		//		}
+		//		partResult := result[startY:endY]
+		//		partWorld := make([][]byte, 0)
+		//		// deal with start and medium
+		//		for offset := 0; offset < endY-startY+2; offset++ {
+		//			partWorld = append(partWorld, world[(offset+startY-1+p.ImageHeight)%p.ImageHeight])
+		//		}
+		//		go worker(partWorld, partResult, c, &wg)
+		//	}
+		//	wg.Wait()
+		//	cellFlipHandling(world, result, p, c, turn)
 	}
+	return result
+}
+
+func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
+	c.ioCommand <- ioOutput
+	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turn)
+	c.ioFilename <- filename
+	for i := 0; i < p.ImageHeight; i++ {
+		for j := 0; j < p.ImageWidth; j++ {
+			if world[i][j] == byte(255) {
+				c.ioOutput <- byte(255)
+			} else {
+				c.ioOutput <- byte(0)
+			}
+		}
+	}
+	return filename
+}
+
+func waitOutputComplete(c distributorChannels) {
+	c.ioCommand <- ioCheckIdle
+	<-c.ioIdle
+}
+
+func handlingEvent(world [][]byte, round int, controlChan *controlChannels, c distributorChannels, finalTurns *int, p Params) bool {
+	quit := true
+	pause := false
+	for {
+		select {
+		case <-controlChan.ticker.C:
+			nums := aliveCounter(world, p)
+			c.events <- AliveCellsCount{round + 1, nums}
+		case <-controlChan.quit: // deal with exit
+			*finalTurns = round + 1
+			return true
+		case <-controlChan.pause:
+			pause = !pause
+			if pause { // deal with pausing
+				c.events <- StateChange{round + 1, Paused}
+				quit = false
+			} else { // deal with resuming
+				c.events <- StateChange{round + 1, Executing}
+				quit = true
+			}
+		case <-controlChan.save: // deal with saving
+			filename := output(world, &c, p, round+1)
+			waitOutputComplete(c)
+			c.events <- ImageOutputComplete{CompletedTurns: round + 1, Filename: filename}
+		default:
+		}
+		if quit {
+			break
+		}
+	}
+	return false
+}
+
+func aliveCounter(world [][]byte, p Params) int {
+	result := 0
+	var mutex sync.Mutex
+	var wg sync.WaitGroup
+	yInterval := p.ImageHeight / p.Threads
+	ys := 0
+	ye := yInterval
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		if i == p.Threads-1 {
+			ye = p.ImageHeight
+		}
+		go func(ys, ye int) {
+			defer wg.Done()
+			localResult := 0
+			for y := ys; y < ye; y++ {
+				for x := 0; x < p.ImageWidth; x++ {
+					if world[y][x] == byte(255) {
+						localResult += 1
+					}
+				}
+			}
+			mutex.Lock()
+			result += localResult
+			mutex.Unlock()
+		}(ys, ye)
+		ys += yInterval
+		ye += yInterval
+	}
+	wg.Wait()
 	return result
 }
 
@@ -172,11 +296,23 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	c.events <- CellsFlipped{0, aliveCells}
 	c.events <- StateChange{turn, Executing}
 
+	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool, 1), time.NewTicker(2 * time.Second)}
+	// deal with keyboard input
+	go keyBoardDetection(keyPresses, controlChan)
+	//gameQuit := false
+	//finalTurns := p.Turns
 	// run evolution until end of turns
 	for i := 0; i < p.Turns; i++ {
-		world = centralDistributor(world, p)
+		world = centralDistributor(world, p, c, i)
+		c.events <- TurnComplete{i + 1}
+		//gameQuit = handlingEvent(world, i, &controlChan, c, &finalTurns, p)
+		//if gameQuit {
+		//	break
+		//}
 	}
-
+	//filename = output(world, &c, p, finalTurns)
+	//waitOutputComplete(c)
+	//c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: filename}
 	c.events <- FinalTurnComplete{p.Turns, checker(world, p)}
 
 	// Make sure that the Io has finished any output before exiting.
