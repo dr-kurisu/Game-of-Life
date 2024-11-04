@@ -35,6 +35,50 @@ func worker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
 			if partResult[y][x] == byte(3) || (partResult[y][x] == byte(2) && partWorld[y+1][x] == byte(255)) {
 				partResult[y][x] = byte(255)
 			}
+			// do not have to set result back to byte(0)
+		}
+	}
+}
+
+func singleThreadWorker(world, result [][]byte) {
+	height := len(world)
+	width := len(world[0])
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			if world[y][x] == byte(255) {
+				for _, d := range dir {
+					result[(y+d[0]+height)%height][(x+d[1]+width)%width] += 1
+				}
+			}
+		}
+	}
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			if result[y][x] == byte(3) || (result[y][x] == byte(2) && world[y][x] == byte(255)) {
+				result[y][x] = byte(255)
+			}
+		}
+	}
+}
+
+func smallThreadWorker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
+	height := len(partResult)
+	width := len(partResult[0])
+	defer wg.Done()
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			if partWorld[y][x] == byte(255) {
+				for _, d := range dir {
+					partResult[(y+d[0]+height)%height][(x+d[1]+width)%width] += 1
+				}
+			}
+		}
+	}
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			if partResult[y][x] == byte(3) || (partResult[y][x] == byte(2) && partWorld[y+1][x] == byte(255)) {
+				partResult[y][x] = byte(255)
+			}
 		}
 	}
 }
@@ -49,22 +93,29 @@ func centralDistributor(world [][]byte, p Params) [][]byte {
 	wg := sync.WaitGroup{}
 	wg.Add(p.Threads)
 
-	for i := 0; i < p.Threads; i++ {
-		startY := i * yInterval
-		endY := (i + 1) * yInterval
-		// deal with the last thread
-		if i == p.Threads-1 {
-			endY = p.ImageHeight
+	// deal with small threads
+	if p.Threads == 1 {
+		singleThreadWorker(world, result)
+	} else if p.Threads < 1 {
+		// 用原本的result加上额外的两行，最后合并额外的两行
+	} else {
+		for i := 0; i < p.Threads; i++ {
+			startY := i * yInterval
+			endY := (i + 1) * yInterval
+			// deal with the last thread
+			if i == p.Threads-1 {
+				endY = p.ImageHeight
+			}
+			partResult := result[startY:endY]
+			partWorld := make([][]byte, 0)
+			// deal with start and medium
+			for offset := 0; offset < endY-startY+2; offset++ {
+				partWorld = append(partWorld, world[(offset+startY-1+p.ImageHeight)%p.ImageHeight])
+			}
+			go worker(partWorld, partResult, &wg)
 		}
-		partResult := result[startY:endY]
-		partWorld := make([][]byte, 0)
-		// deal with start and medium
-		for offset := 0; offset < endY-startY+2; offset++ {
-			partWorld = append(partWorld, world[(offset+startY-1+p.ImageHeight)%p.ImageHeight])
-		}
-		go worker(partWorld, partResult, &wg)
+		wg.Wait()
 	}
-	wg.Wait()
 	return result
 }
 
