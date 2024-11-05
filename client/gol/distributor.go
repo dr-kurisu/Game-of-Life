@@ -105,7 +105,6 @@ func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 			}
 		}
 	}
-	fmt.Println("Output Alive:", Alive)
 	return filename
 }
 
@@ -131,7 +130,7 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, finalTur
 	for {
 		select {
 		case <-controlChan.quit:
-			*finalTurns = round
+			*finalTurns = round + 1
 			return true
 		case <-controlChan.ticker.C:
 			c.events <- AliveCellsCount{CompletedTurns: round + 1, CellsCount: aliveCounter(world, p)}
@@ -145,10 +144,7 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, finalTur
 				quit = true
 			}
 		case <-controlChan.save: // deal with saving
-			Alive := aliveCounter(world, p)
-			fmt.Println("checker Alive: ", Alive)
-			fmt.Println("Current round:", round)
-			filename := output(world, &c, p, round)
+			filename := output(world, &c, p, round+1)
 			c.ioCommand <- ioCheckIdle
 			select {
 			case <-c.ioIdle:
@@ -161,10 +157,35 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, finalTur
 		}
 	}
 	return false
-
 }
 
-func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte {
+func cellFlipHandling(world [][]byte, result [][]byte, p Params, c distributorChannels, turn int) {
+	var wg sync.WaitGroup
+	yInterval := p.ImageHeight / p.Threads
+	ys := 0
+	ye := yInterval
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		if i == p.Threads-1 {
+			ye = p.ImageHeight
+		}
+		go func(ys, ye int) {
+			defer wg.Done()
+			for y := ys; y < ye; y++ {
+				for x := 0; x < p.ImageWidth; x++ {
+					if world[y][x] != byte(255) && result[y][x] == byte(255) || world[y][x] == byte(255) && result[y][x] != byte(255) {
+						c.events <- CellFlipped{CompletedTurns: turn, Cell: util.Cell{X: x, Y: y}}
+					}
+				}
+			}
+		}(ys, ye)
+		ys += yInterval
+		ye += yInterval
+	}
+	wg.Wait()
+}
+
+func broker(world [][]byte, clients []*rpc.Client, turn int, p Params, c distributorChannels) [][]byte {
 	yInterval := p.ImageHeight / len(clients)
 	height := len(world)
 	width := len(world[0])
@@ -205,6 +226,7 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 		}()
 	}
 	wg.Wait()
+	cellFlipHandling(world, result, p, c, turn+1)
 	return result
 }
 
@@ -222,6 +244,8 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	for index := 0; index < p.ImageHeight*p.ImageWidth; index++ {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
+	// Flip cells
+	c.events <- CellsFlipped{0, checker(world, p)}
 	// define of ports
 	ports := make([]string, 1)
 	ports[0] = "localhost:8030" // Ip to be confirmed
@@ -244,22 +268,21 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	go keyBoardDetection(keyPresses, controlChan)
 
 	for i := 0; i < finalTurns; i++ {
-		world = broker(world, clients, i, p)
+		world = broker(world, clients, i, p, c)
+		c.events <- TurnComplete{i + 1}
 		GameQuit = handlingEvent(&controlChan, c, &finalTurns, world, p, i)
 		if GameQuit {
-			fmt.Println("turn:", i)
 			break
 		}
 	}
 	// output as pgm file
 	outputFileName := output(world, &c, p, finalTurns)
 	c.ioCommand <- ioCheckIdle
-	select {
-	case <-c.ioIdle:
-		c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: outputFileName}
-	}
+	<-c.ioIdle
+	c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: outputFileName}
+
 	// TODO: Report the final state using FinalTurnCompleteEvent.
-	c.events <- FinalTurnComplete{p.Turns, checker(world, p)}
+	c.events <- FinalTurnComplete{finalTurns, checker(world, p)}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
