@@ -46,22 +46,37 @@ func singleThreadWorker(world, result [][]byte) {
 	}
 }
 
-func producer(world [][]byte, taskQueue chan []byte) {
+func producer(world [][]byte, taskQueue chan int) {
 	// create a task from index 0, +3 each time, ignore visited index
 	for i := 0; i < len(world); i += 3 {
-		taskQueue <- world[i]
+		taskQueue <- i
 	}
 	for i := 1; i < len(world); i += 3 {
-		taskQueue <- world[i]
+		taskQueue <- i
 	}
 	for i := 2; i < len(world); i += 3 {
-		taskQueue <- world[i]
+		taskQueue <- i
 	}
 }
 
-func multiThreadWorker(result, taskQueue chan []byte) {
-	task := <-taskQueue
-	resultForTask := result[]
+func multiThreadWorker(world, result [][]byte, taskQueue chan int, wg *sync.WaitGroup) {
+	height := len(result)
+	width := len(result[0])
+	for {
+		line := <-taskQueue
+		// only region could cause race in assignment
+		resultForTask := result[(line-1+height)%height : (line+1+height)%height]
+		worldForTask := world[line]
+
+		for x := 0; x < width; x++ {
+			if worldForTask[x] == byte(255) {
+				for _, d := range dir {
+					resultForTask[d[0]+1][(d[1]+x+width)%width] += 1
+				}
+			}
+		}
+		wg.Done()
+	}
 }
 
 func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
@@ -71,7 +86,6 @@ func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
 		case 's':
 			controlChan.save <- true
 		case 'q':
-
 			controlChan.quit <- true
 		case 'p':
 			controlChan.pause <- true
@@ -118,14 +132,18 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 	wg := sync.WaitGroup{}
 	wg.Add(p.Threads)
 
-	if p.Threads == 1 {
+	if p.Threads > 0 {
 		singleThreadWorker(world, result)
-	} else {
-		taskQueue := make(chan []byte, p.Threads*2)
+	} else if p.Threads*3 < p.ImageHeight {
+		taskQueue := make(chan int, p.Threads*2)
 		go producer(world, taskQueue)
-		multiThreadWorker(taskQueue)
+		wgLocal := sync.WaitGroup{}
+		wgLocal.Add(p.ImageHeight)
+		for i := 0; i < p.Threads; i++ {
+			go multiThreadWorker(world, result, taskQueue, &wg)
+		}
+		wgLocal.Wait()
 	}
-
 	return result
 }
 
@@ -255,9 +273,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	for i := 0; i < p.ImageHeight; i++ {
 		world[i] = make([]byte, p.ImageWidth)
 	}
-
 	turn := 0
-
 	c.ioCommand <- ioInput
 	filename := fmt.Sprintf("%dx%d", p.ImageWidth, p.ImageHeight)
 	c.ioFilename <- filename
@@ -291,9 +307,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle
-
 	c.events <- StateChange{turn, Quitting}
-
 	// Close the channel to stop the SDL goroutine gracefully. Removing may cause deadlock.
 	close(c.events)
 }
