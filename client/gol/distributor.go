@@ -91,14 +91,21 @@ func checker(world [][]byte, p Params) []util.Cell {
 }
 
 func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
+	Alive := 0
 	c.ioCommand <- ioOutput
 	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turn)
 	c.ioFilename <- filename
 	for i := 0; i < p.ImageHeight; i++ {
 		for j := 0; j < p.ImageWidth; j++ {
-			c.ioOutput <- world[i][j]
+			if world[i][j] == byte(255) {
+				Alive++
+				c.ioOutput <- byte(255)
+			} else {
+				c.ioOutput <- byte(0)
+			}
 		}
 	}
+	fmt.Println("Output Alive:", Alive)
 	return filename
 }
 
@@ -124,26 +131,30 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, finalTur
 	for {
 		select {
 		case <-controlChan.quit:
-			*finalTurns = round + 1
+			*finalTurns = round
+			fmt.Println("quit turn:", *finalTurns)
 			return true
 		case <-controlChan.ticker.C:
-			c.events <- AliveCellsCount{CompletedTurns: round + 1, CellsCount: aliveCounter(world, p)}
+			c.events <- AliveCellsCount{CompletedTurns: round, CellsCount: aliveCounter(world, p)}
 		case <-controlChan.pause:
 			pause = !pause
 			if pause {
 				c.events <- StateChange{round, Paused}
 				quit = false
 			} else {
-				c.events <- StateChange{round + 1, Executing}
+				c.events <- StateChange{round, Executing}
 				quit = true
 			}
 		case <-controlChan.save: // deal with saving
-			filename := output(world, &c, p, round+1)
+			Alive := aliveCounter(world, p)
+			fmt.Println("checker Alive: ", Alive)
+			fmt.Println("Current round:", round)
+			filename := output(world, &c, p, round)
 			c.ioCommand <- ioCheckIdle
 			select {
 			case <-c.ioIdle:
 			}
-			c.events <- ImageOutputComplete{CompletedTurns: round + 1, Filename: filename}
+			c.events <- ImageOutputComplete{CompletedTurns: round, Filename: filename}
 		default:
 		}
 		if quit {
@@ -188,7 +199,9 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 				panic(err)
 			}
 			for j := 0; j < len(response.World); j++ {
-				result[j] = response.World[j]
+				for k := 0; k < len(response.World[j]); k++ {
+					result[j][k] = response.World[j][k]
+				}
 			}
 		}()
 	}
@@ -227,10 +240,18 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	// TODO: Execute all turns of the Game of Life.
 	// let server run the task and receive world in each round
 	c.events <- StateChange{turn, Executing}
-	for i := 0; i < p.Turns; i++ {
-		world = broker(world, clients, i, p)
-	}
+	GameQuit := false
+	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool), time.NewTicker(2 * time.Second)}
+	go keyBoardDetection(keyPresses, controlChan)
 
+	for i := 0; i < finalTurns; i++ {
+		world = broker(world, clients, i, p)
+		GameQuit = handlingEvent(&controlChan, c, &finalTurns, world, p, i)
+		if GameQuit {
+			fmt.Println("turn:", i)
+			break
+		}
+	}
 	// output as pgm file
 	outputFileName := output(world, &c, p, finalTurns)
 	c.ioCommand <- ioCheckIdle

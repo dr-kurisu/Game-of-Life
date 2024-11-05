@@ -43,7 +43,7 @@ func main() {
 
 	headless := flag.Bool(
 		"headless",
-		true,
+		false,
 		"Disable the SDL window for running in a headless environment.")
 
 	flag.Parse()

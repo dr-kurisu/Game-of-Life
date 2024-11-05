@@ -71,7 +71,10 @@ func (a *Operator) DistributeWorker(request Request, response *Response) error {
 	response.World = make([][]byte, len(world))
 	for i := range world {
 		response.World[i] = make([]byte, len(world[i]))
-		copy(response.World[i], world[i])
+		for j := range response.World[i] {
+			response.World[i][j] = world[i][j]
+		}
+		//copy(response.World[i], world[i])
 	}
 	return nil
 }

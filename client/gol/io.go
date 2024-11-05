@@ -61,17 +61,23 @@ func (io *ioState) writePgmImage() {
 	for i := range world {
 		world[i] = make([]byte, io.params.ImageWidth)
 	}
-
+	Alive := 0
 	for y := 0; y < io.params.ImageHeight; y++ {
 		for x := 0; x < io.params.ImageWidth; x++ {
 			val := <-io.channels.output
+			if val == 255 {
+				Alive++
+			}
 			//if val != 0 {
 			//	fmt.Println(x, y)
 			//}
+			if val != 0 && val != 255 {
+				panic("val in graph goes wrong")
+			}
 			world[y][x] = val
 		}
 	}
-
+	fmt.Println(Alive)
 	for y := 0; y < io.params.ImageHeight; y++ {
 		for x := 0; x < io.params.ImageWidth; x++ {
 			_, ioError = file.Write([]byte{world[y][x]})
