@@ -4,7 +4,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
 	"uk.ac.bris.cs/gameoflife/gol"
 )
 
@@ -49,6 +48,8 @@ func testKeyboardP(t *testing.T) {
 	tester := MakeTester(t, params, keyPresses, events, golDone)
 
 	go func() {
+		tester.TestStartsExecuting()
+
 		turn := tester.TestPauses()
 
 		tester.TestNoStateChange(5 * time.Second)
@@ -87,6 +88,8 @@ func testKeyboardS(t *testing.T) {
 	tester := MakeTester(t, params, keyPresses, events, golDone)
 
 	go func() {
+		tester.TestStartsExecuting()
+
 		time.Sleep(500 * time.Millisecond)
 		keyPresses <- 's'
 		tester.TestOutput()
@@ -119,6 +122,8 @@ func testKeyboardQ(t *testing.T) {
 	tester := MakeTester(t, params, keyPresses, events, golDone)
 
 	go func() {
+		tester.TestStartsExecuting()
+
 		time.Sleep(500 * time.Millisecond)
 
 		keyPresses <- 'q'
@@ -151,6 +156,8 @@ func testKeyboardPS(t *testing.T) {
 	tester := MakeTester(t, params, keyPresses, events, golDone)
 
 	go func() {
+		tester.TestStartsExecuting()
+
 		time.Sleep(500 * time.Millisecond)
 
 		keyPresses <- 'p'
@@ -188,6 +195,8 @@ func testKeyboardPQ(t *testing.T) {
 	tester := MakeTester(t, params, keyPresses, events, golDone)
 
 	go func() {
+		tester.TestStartsExecuting()
+
 		time.Sleep(500 * time.Millisecond)
 
 		keyPresses <- 'p'

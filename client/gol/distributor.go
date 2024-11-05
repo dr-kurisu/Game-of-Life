@@ -185,51 +185,6 @@ func cellFlipHandling(world [][]byte, result [][]byte, p Params, c distributorCh
 	wg.Wait()
 }
 
-func broker(world [][]byte, clients []*rpc.Client, turn int, p Params, c distributorChannels) [][]byte {
-	yInterval := p.ImageHeight / len(clients)
-	height := len(world)
-	width := len(world[0])
-	result := make([][]byte, height)
-	for i := 0; i < height; i++ {
-		result[i] = make([]byte, width)
-	}
-
-	wg := &sync.WaitGroup{}
-	wg.Add(len(clients))
-	for i, client := range clients {
-		startY := i * yInterval
-		endY := startY + yInterval
-		if i == len(clients)-1 {
-			endY = height
-		}
-		request := Request{
-			World: make([][]byte, 0),
-			Turn:  turn,
-			P:     p,
-		}
-		for j := startY; j < endY+2; j++ {
-			request.World = append(request.World, world[(j-1+height)%height])
-		}
-		response := Response{}
-		client := client
-		go func() {
-			defer wg.Done()
-			err := client.Call("Operator.DistributeWorker", request, &response)
-			if err != nil {
-				panic(err)
-			}
-			for j := 0; j < len(response.World); j++ {
-				for k := 0; k < len(response.World[j]); k++ {
-					result[j][k] = response.World[j][k]
-				}
-			}
-		}()
-	}
-	wg.Wait()
-	cellFlipHandling(world, result, p, c, turn+1)
-	return result
-}
-
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	world := make([][]byte, p.ImageHeight)
@@ -250,13 +205,9 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	ports := make([]string, 1)
 	ports[0] = "localhost:8030" // Ip to be confirmed
 	// Send world to server
-	clients := make([]*rpc.Client, len(ports))
-	for i := 0; i < len(clients); i++ {
-		client, err := rpc.Dial("tcp", ports[0])
-		if err != nil {
-			panic(err)
-		}
-		clients[i] = client
+	broker, err := rpc.Dial("tcp", "localhost:8031")
+	if err != nil {
+		panic(err)
 	}
 	turn := 0
 	finalTurns := p.Turns
@@ -268,7 +219,17 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	go keyBoardDetection(keyPresses, controlChan)
 
 	for i := 0; i < finalTurns; i++ {
-		world = broker(world, clients, i, p, c)
+		// __________________________change_______________________________
+		// call function in broker
+		err := broker.Call("Operator.BrokerWorker", nil, nil)
+		if err != nil {
+			panic(err)
+		}
+		// assign to result
+
+		// ____________________________change________________________________
+		// deal with event handling
+		cellFlipHandling(world, result, p, c, turn+1)
 		c.events <- TurnComplete{i + 1}
 		GameQuit = handlingEvent(&controlChan, c, &finalTurns, world, p, i)
 		if GameQuit {

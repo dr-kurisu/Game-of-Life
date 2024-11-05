@@ -1,10 +1,14 @@
 package gol
 
-type Request struct {
-	World [][]byte
-	Turn  int
-	P     Params
+import "net/rpc"
+
+type RequestBroker struct {
+	World   [][]byte
+	Clients []*rpc.Client
+	Turn    int
+	P       Params
 }
-type Response struct {
+
+type ResponseBroker struct {
 	World [][]byte
 }
