@@ -4,89 +4,83 @@ import (
 	"fmt"
 	"net"
 	"net/rpc"
-	"uk.ac.bris.cs/gameoflife/util"
+	"sync"
 )
 
 type Operator struct{}
 
-//this function is used to simulate the turns of Game of Life
-func counting(world [][]byte, x, y int) int {
-	dir := [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
-	counter := 0
-	width := len(world[0])
-	height := len(world)
-	for _, d := range dir {
-		newY := (y + d[0] + height) % height
-		newX := (x + d[1] + width) % width
-		if world[newY][newX] == byte(255) {
-			counter++
-		}
-	}
-	return counter
-}
+var world [][]byte
 
-func evolution(world [][]byte) [][]byte {
-	newWorld := make([][]byte, len(world))
-	for i := 0; i < len(world); i++ {
-		newWorld[i] = make([]byte, len(world[0]))
-	}
-	for y, _ := range world {
-		for x, _ := range world[y] {
-			nums := counting(world, x, y)
-			switch {
-			case nums == 3:
-				newWorld[y][x] = byte(255)
-			case nums > 3 || nums < 2:
-				newWorld[y][x] = byte(0)
-			default:
-				newWorld[y][x] = world[y][x]
+var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
+
+//these functions are used to simulate the turns of Game of Life
+func worker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
+	defer wg.Done()
+	interval := len(partResult)
+	width := len(partResult[0])
+	for y := 0; y < interval; y++ {
+		for x := 0; x < width; x++ {
+			for _, d := range dir {
+				if partWorld[y+d[0]+1][(x+d[1]+width)%width] == byte(255) {
+					partResult[y][x] += 1
+				}
 			}
 		}
 	}
-	return newWorld
+	for y := 0; y < interval; y++ {
+		for x := 0; x < width; x++ {
+			if partResult[y][x] == byte(3) || (partResult[y][x] == byte(2) && partWorld[y+1][x] == byte(255)) {
+				partResult[y][x] = byte(255)
+			}
+		}
+	}
 }
 
-func (a *Operator) Connection(request ReceiveFromServer, reply *SendToClient) error {
-	p := request.P
-	reply.World = make([][]byte, p.ImageHeight)
+func centralDistributor(world [][]byte, p Params, turn int) [][]byte {
+	yInterval := p.ImageHeight / p.Threads
+	result := make([][]byte, p.ImageHeight)
 	for i := 0; i < p.ImageHeight; i++ {
-		reply.World[i] = make([]byte, p.ImageWidth)
+		result[i] = make([]byte, p.ImageWidth)
 	}
-	world := make([][]byte, request.P.ImageHeight)
-	for i := 0; i < request.P.ImageHeight; i++ {
-		world[i] = make([]byte, request.P.ImageWidth)
-		for j := 0; j < request.P.ImageWidth; j++ {
-			world[i][j] = request.CurrentWorld[i][j]
-		}
-	}
-	// run evolution until end of turns
-	world = evolution(world)
 
-	for y := 0; y < p.ImageHeight; y++ {
-		for x := 0; x < p.ImageWidth; x++ {
-			reply.World[y][x] = world[y][x]
+	// wg used to control each thread
+	wg := sync.WaitGroup{}
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		startY := i * yInterval
+		endY := (i + 1) * yInterval
+		// deal with the last thread
+		if i == p.Threads-1 {
+			endY = p.ImageHeight
 		}
+		partResult := result[startY:endY]
+		partWorld := make([][]byte, 0)
+		// deal with start and medium
+		for offset := 0; offset < endY-startY+2; offset++ {
+			partWorld = append(partWorld, world[(offset+startY-1+p.ImageHeight)%p.ImageHeight])
+		}
+		go worker(partWorld, partResult, &wg)
+		//cellFlipHandling(world, result, p, c, turn)
+	}
+	wg.Wait()
+	return result
+}
+
+func (a *Operator) DistributeWorker(request Request, response *Response) error {
+	world = centralDistributor(request.World, request.P, request.Turn)
+	response.World = make([][]byte, len(world))
+	for i := range world {
+		response.World[i] = make([]byte, len(world[i]))
+		copy(response.World[i], world[i])
 	}
 	return nil
-}
-
-func checker(world [][]byte) []util.Cell {
-	result := make([]util.Cell, 0)
-	for y, _ := range world {
-		for x, _ := range world[y] {
-			if world[y][x] == byte(255) {
-				result = append(result, util.Cell{X: x, Y: y})
-			}
-		}
-	}
-	return result
 }
 
 //It's the sever, used to listen and pass the argus to client by channel
 func server() {
 	err := rpc.Register(&Operator{})
 	if err != nil {
-		fmt.Println("register error")
+		fmt.Println(err)
 		return
 	}
 	listener, _ := net.Listen("tcp", ":8030")

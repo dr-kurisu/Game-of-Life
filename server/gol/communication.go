@@ -1,9 +1,11 @@
 package gol
 
-type ReceiveFromServer struct {
-	P            Params
-	CurrentWorld [][]byte
+type Request struct {
+	// world with two extra line
+	World [][]byte
+	Turn  int
+	P     Params
 }
-type SendToClient struct {
+type Response struct {
 	World [][]byte
 }

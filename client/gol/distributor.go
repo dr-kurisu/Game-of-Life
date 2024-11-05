@@ -16,6 +16,7 @@ type distributorChannels struct {
 	ioOutput   chan<- uint8
 	ioInput    <-chan uint8
 }
+
 type controlChannels struct {
 	pause  chan bool
 	quit   chan bool
@@ -23,24 +24,13 @@ type controlChannels struct {
 	ticker *time.Ticker
 }
 
-func checker(world [][]byte) []util.Cell {
-	result := make([]util.Cell, 0)
-	for y, _ := range world {
-		for x, _ := range world[y] {
-			if world[y][x] == byte(255) {
-				result = append(result, util.Cell{X: x, Y: y})
-			}
-		}
-	}
-	return result
-}
 func aliveCounter(world [][]byte, p Params) int {
 	result := 0
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
-	y_interval := p.ImageHeight / p.Threads
+	yInterval := p.ImageHeight / p.Threads
 	ys := 0
-	ye := y_interval
+	ye := yInterval
 	wg.Add(p.Threads)
 	for i := 0; i < p.Threads; i++ {
 		if i == p.Threads-1 {
@@ -60,32 +50,43 @@ func aliveCounter(world [][]byte, p Params) int {
 			result += localResult
 			mutex.Unlock()
 		}(ys, ye)
-		ys += y_interval
-		ye += y_interval
+		ys += yInterval
+		ye += yInterval
 	}
 	wg.Wait()
 	return result
 }
-func comWithServer(client *rpc.Client, world [][]byte, p Params, group *sync.WaitGroup) []util.Cell {
+
+func checker(world [][]byte, p Params) []util.Cell {
 	result := make([]util.Cell, 0)
-	send := ReceiveFromServer{P: p, CurrentWorld: world}
-	res := SendToClient{}
-	res.World = make([][]byte, p.ImageHeight)
-	for i := 0; i < p.ImageHeight; i++ {
-		res.World[i] = make([]byte, p.ImageWidth)
-		for j := 0; j < p.ImageWidth; j++ {
-			res.World[i][j] = world[i][j]
+	var mutex sync.Mutex
+	var wg sync.WaitGroup
+	yInterval := p.ImageHeight / p.Threads
+	ys := 0
+	ye := yInterval
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		if i == p.Threads-1 {
+			ye = p.ImageHeight
 		}
-	}
-	client.Call("Operator.Connection", send, &res)
-	for q := 0; q < p.ImageHeight; q++ {
-		for a := 0; a < p.ImageWidth; a++ {
-			send.CurrentWorld[q][a] = res.World[q][a]
-			if res.World[q][a] == 255 {
-				result = append(result, util.Cell{X: q, Y: a})
+		go func(ys, ye int) {
+			defer wg.Done()
+			localResult := make([]util.Cell, 0)
+			for y := ys; y < ye; y++ {
+				for x := 0; x < p.ImageWidth; x++ {
+					if world[y][x] == byte(255) {
+						localResult = append(localResult, util.Cell{X: x, Y: y})
+					}
+				}
 			}
-		}
+			mutex.Lock()
+			result = append(result, localResult...)
+			mutex.Unlock()
+		}(ys, ye)
+		ys += yInterval
+		ye += yInterval
 	}
+	wg.Wait()
 	return result
 }
 
@@ -100,6 +101,7 @@ func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 	}
 	return filename
 }
+
 func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
 	for {
 		key := <-keyPresses
@@ -115,6 +117,7 @@ func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
 		}
 	}
 }
+
 func handlingEvent(controlChan *controlChannels, c distributorChannels, finalTurns *int, world [][]byte, p Params, round int) bool {
 	quit := true
 	pause := false
@@ -151,53 +154,46 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, finalTur
 
 }
 
-//broker
-func broker(world [][]byte, p Params, c distributorChannels, keyPresses <-chan rune, server int, port []string) [][]byte {
-	nextround := make([][]byte, p.ImageHeight)
-	resultOfWorker := make([]util.Cell, p.ImageHeight*p.ImageWidth)
-	for i := 0; i < p.ImageHeight; i++ {
-		nextround[i] = make([]byte, p.ImageWidth)
+func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte {
+	yInterval := p.ImageHeight / len(clients)
+	height := len(world)
+	width := len(world[0])
+	result := make([][]byte, height)
+	for i := 0; i < height; i++ {
+		result[i] = make([]byte, width)
 	}
-	var yInterval int
-	if server == 1 {
-		yInterval = p.ImageHeight
-	} else {
-		yInterval = (p.ImageHeight / server) + 2
-	}
-	for i := 0; i < p.Turns; i++ {
-		separateWorld := make([][]byte, yInterval) // give top line and the bottom line
-		for i := 0; i < yInterval; i++ {
-			separateWorld[i] = make([]byte, p.ImageWidth)
+
+	wg := &sync.WaitGroup{}
+	wg.Add(len(clients))
+	for i, client := range clients {
+		startY := i * yInterval
+		endY := startY + yInterval
+		if i == len(clients)-1 {
+			endY = height
 		}
-		var wg sync.WaitGroup
-		for i := range port {
-			wg.Add(1)
-			client, _ := rpc.Dial("tcp", port[i])
-			fmt.Println("connection started")
-			if client == nil {
-				fmt.Println("Wrong conn")
+		request := Request{
+			World: make([][]byte, 0),
+			Turn:  turn,
+			P:     p,
+		}
+		for j := startY; j < endY+2; j++ {
+			request.World = append(request.World, world[(j-1+height)%height])
+		}
+		response := Response{}
+		client := client
+		go func() {
+			defer wg.Done()
+			err := client.Call("Operator.DistributeWorker", request, &response)
+			if err != nil {
+				panic(err)
 			}
-			defer client.Close()
-			go func() {
-				defer wg.Done()
-				resultOfWorker = append(resultOfWorker, comWithServer(client, world, p, &wg)...)
-			}()
-		}
-		wg.Wait()
-		GameQuit := false
-		finalTurns := p.Turns
-		controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool), time.NewTicker(2 * time.Second)}
-		go keyBoardDetection(keyPresses, controlChan)
-		GameQuit = handlingEvent(&controlChan, c, &finalTurns, world, p, i)
-		if GameQuit {
-			break
-		}
-		for l := range resultOfWorker {
-			current := resultOfWorker[l]
-			nextround[current.Y][current.X] = 255
-		}
+			for i := 0; i < len(response.World); i++ {
+				result[i] = response.World[i]
+			}
+		}()
 	}
-	return nextround
+	wg.Wait()
+	return result
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
@@ -210,21 +206,31 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	filename := fmt.Sprintf("%dx%d", p.ImageWidth, p.ImageHeight)
 	c.ioFilename <- filename
 
+	// Receive world from IO
 	for index := 0; index < p.ImageHeight*p.ImageWidth; index++ {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
-
+	// define of ports
+	ports := make([]string, 1)
+	ports[0] = "localhost:8030" // Ip to be confirmed
+	// Send world to server
+	clients := make([]*rpc.Client, len(ports))
+	for i := 0; i < len(clients); i++ {
+		client, err := rpc.Dial("tcp", ports[0])
+		if err != nil {
+			panic(err)
+		}
+		clients[i] = client
+	}
 	turn := 0
-	// TODO: Execute all turns of the Game of Life.
-	// initialise the client
-	port := make([]string, 100)
-	port[0] = "localhost:8030" // Ip to be confirmed
-	// ........ more address
 	finalTurns := p.Turns
-
-	// communicate with server and get the response
+	// TODO: Execute all turns of the Game of Life.
+	// let server run the task and receive world in each round
 	c.events <- StateChange{turn, Executing}
-	broker(world, p, c, keyPresses, len(port), port)
+	for i := 0; i < p.Turns; i++ {
+		world = broker(world, clients, i, p)
+	}
+
 	// output as pgm file
 	outputFileName := output(world, &c, p, finalTurns)
 	c.ioCommand <- ioCheckIdle
@@ -233,7 +239,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: outputFileName}
 	}
 	// TODO: Report the final state using FinalTurnCompleteEvent.
-	c.events <- FinalTurnComplete{p.Turns, checker(world)}
+	c.events <- FinalTurnComplete{p.Turns, checker(world, p)}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle

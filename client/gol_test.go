@@ -27,6 +27,7 @@ func TestGol(t *testing.T) {
 				p.Threads = threads
 				testName := fmt.Sprintf("%dx%dx%d-%d", p.ImageWidth, p.ImageHeight, p.Turns, p.Threads)
 				t.Run(testName, func(t *testing.T) {
+
 					events := make(chan gol.Event)
 					go gol.Run(p, events, nil)
 					var cells []util.Cell
