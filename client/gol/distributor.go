@@ -187,8 +187,8 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 			if err != nil {
 				panic(err)
 			}
-			for i := 0; i < len(response.World); i++ {
-				result[i] = response.World[i]
+			for j := 0; j < len(response.World); j++ {
+				result[j] = response.World[j]
 			}
 		}()
 	}

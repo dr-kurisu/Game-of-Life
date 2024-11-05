@@ -37,29 +37,28 @@ func worker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
 }
 
 func centralDistributor(world [][]byte, p Params, turn int) [][]byte {
-	yInterval := p.ImageHeight / p.Threads
-	result := make([][]byte, p.ImageHeight)
-	for i := 0; i < p.ImageHeight; i++ {
-		result[i] = make([]byte, p.ImageWidth)
-	}
+	height := len(world) - 2
+	width := len(world[0])
 
+	yInterval := height / p.Threads
+
+	result := make([][]byte, height)
+	for i := 0; i < height; i++ {
+		result[i] = make([]byte, width)
+	}
 	// wg used to control each thread
 	wg := sync.WaitGroup{}
 	wg.Add(p.Threads)
 	for i := 0; i < p.Threads; i++ {
 		startY := i * yInterval
-		endY := (i + 1) * yInterval
+		endY := startY + yInterval
 		// deal with the last thread
 		if i == p.Threads-1 {
-			endY = p.ImageHeight
+			endY = height
 		}
 		partResult := result[startY:endY]
-		partWorld := make([][]byte, 0)
 		// deal with start and medium
-		for offset := 0; offset < endY-startY+2; offset++ {
-			partWorld = append(partWorld, world[(offset+startY-1+p.ImageHeight)%p.ImageHeight])
-		}
-		go worker(partWorld, partResult, &wg)
+		go worker(world, partResult, &wg)
 		//cellFlipHandling(world, result, p, c, turn)
 	}
 	wg.Wait()
@@ -68,6 +67,7 @@ func centralDistributor(world [][]byte, p Params, turn int) [][]byte {
 
 func (a *Operator) DistributeWorker(request Request, response *Response) error {
 	world = centralDistributor(request.World, request.P, request.Turn)
+	// send world
 	response.World = make([][]byte, len(world))
 	for i := range world {
 		response.World[i] = make([]byte, len(world[i]))
