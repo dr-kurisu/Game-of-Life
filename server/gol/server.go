@@ -37,6 +37,7 @@ func worker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
 }
 
 func centralDistributor(world [][]byte, p Params, turn int) [][]byte {
+	p.Threads = 1
 	height := len(world) - 2
 	width := len(world[0])
 

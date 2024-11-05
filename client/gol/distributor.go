@@ -132,10 +132,9 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, finalTur
 		select {
 		case <-controlChan.quit:
 			*finalTurns = round
-			fmt.Println("quit turn:", *finalTurns)
 			return true
 		case <-controlChan.ticker.C:
-			c.events <- AliveCellsCount{CompletedTurns: round, CellsCount: aliveCounter(world, p)}
+			c.events <- AliveCellsCount{CompletedTurns: round + 1, CellsCount: aliveCounter(world, p)}
 		case <-controlChan.pause:
 			pause = !pause
 			if pause {
