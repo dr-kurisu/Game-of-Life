@@ -218,18 +218,35 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool), time.NewTicker(2 * time.Second)}
 	go keyBoardDetection(keyPresses, controlChan)
 
-	for i := 0; i < finalTurns; i++ {
+	for i := 0; i < p.Turns; i++ {
 		// __________________________change_______________________________
 		// call function in broker
-		err := broker.Call("Operator.BrokerWorker", nil, nil)
+		request := RequestBroker{
+			World: make([][]byte, p.ImageHeight),
+			Ports: ports,
+			Turn:  i,
+			P:     p,
+		}
+		result := make([][]byte, p.ImageHeight)
+		for i := 0; i < p.ImageHeight; i++ {
+			result[i] = make([]byte, p.ImageWidth)
+		}
+
+		for i := 0; i < p.ImageHeight; i++ {
+			request.World[i] = make([]byte, p.ImageWidth)
+			copy(request.World[i], world[i])
+		}
+
+		response := ResponseBroker{}
+		err := broker.Call("Operator.BrokerWorker", request, &response)
 		if err != nil {
 			panic(err)
 		}
-		// assign to result
-
-		// ____________________________change________________________________
-		// deal with event handling
+		for i := 0; i < p.ImageHeight; i++ {
+			copy(result[i], response.World[i])
+		}
 		cellFlipHandling(world, result, p, c, turn+1)
+		world = result
 		c.events <- TurnComplete{i + 1}
 		GameQuit = handlingEvent(&controlChan, c, &finalTurns, world, p, i)
 		if GameQuit {

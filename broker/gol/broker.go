@@ -10,7 +10,7 @@ import (
 type Operator struct{}
 
 // _________________________________change_____________________________________
-func (a *Operator) brokerWorker(request RequestBroker, response *ResponseBroker) error {
+func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker) error {
 	// deal with connection
 	clients := make([]*rpc.Client, len(request.Ports))
 	for i := 0; i < len(clients); i++ {

@@ -1,12 +1,10 @@
 package gol
 
-import "net/rpc"
-
 type RequestBroker struct {
-	World   [][]byte
-	Clients []*rpc.Client
-	Turn    int
-	P       Params
+	World [][]byte
+	Ports []string
+	Turn  int
+	P     Params
 }
 
 type ResponseBroker struct {
