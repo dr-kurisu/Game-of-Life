@@ -25,28 +25,6 @@ type controlChannels struct {
 
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
 
-func worker(partWorld [][]byte, partResult [][]byte, c distributorChannels, wg *sync.WaitGroup) {
-	defer wg.Done()
-	interval := len(partResult)
-	width := len(partResult[0])
-	for y := 0; y < interval; y++ {
-		for x := 0; x < width; x++ {
-			for _, d := range dir {
-				if partWorld[y+d[0]+1][(x+d[1]+width)%width] == byte(255) {
-					partResult[y][x] += 1
-				}
-			}
-		}
-	}
-	for y := 0; y < interval; y++ {
-		for x := 0; x < width; x++ {
-			if partResult[y][x] == byte(3) || (partResult[y][x] == byte(2) && partWorld[y+1][x] == byte(255)) {
-				partResult[y][x] = byte(255)
-			}
-		}
-	}
-}
-
 func singleThreadWorker(world, result [][]byte) {
 	height := len(world)
 	width := len(world[0])
@@ -68,11 +46,22 @@ func singleThreadWorker(world, result [][]byte) {
 	}
 }
 
-func smallThreadWorker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
-
+func producer(world [][]byte, taskQueue chan []byte) {
+	// create a task from index 0, +3 each time, ignore visited index
+	for i := 0; i < len(world); i += 3 {
+		taskQueue <- world[i]
+	}
+	for i := 1; i < len(world); i += 3 {
+		taskQueue <- world[i]
+	}
+	for i := 2; i < len(world); i += 3 {
+		taskQueue <- world[i]
+	}
 }
 
-func haloExchangeWorker(partWorld, partResult [][]byte, request chan util.Cell, respone chan util.Cell) {
+func multiThreadWorker(result, taskQueue chan []byte) {
+	task := <-taskQueue
+	resultForTask := result[]
 }
 
 func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
@@ -129,30 +118,14 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 	wg := sync.WaitGroup{}
 	wg.Add(p.Threads)
 
-	// deal with small threads
-	if p.Threads > 0 {
+	if p.Threads == 1 {
 		singleThreadWorker(world, result)
-		//} else if p.Threads < 1 {
-		//	// 用原本的result加上额外的两行，最后合并额外的两行
-		//} else {
-		//	for i := 0; i < p.Threads; i++ {
-		//		startY := i * yInterval
-		//		endY := (i + 1) * yInterval
-		//		// deal with the last thread
-		//		if i == p.Threads-1 {
-		//			endY = p.ImageHeight
-		//		}
-		//		partResult := result[startY:endY]
-		//		partWorld := make([][]byte, 0)
-		//		// deal with start and medium
-		//		for offset := 0; offset < endY-startY+2; offset++ {
-		//			partWorld = append(partWorld, world[(offset+startY-1+p.ImageHeight)%p.ImageHeight])
-		//		}
-		//		go worker(partWorld, partResult, c, &wg)
-		//	}
-		//	wg.Wait()
-		//	cellFlipHandling(world, result, p, c, turn)
+	} else {
+		taskQueue := make(chan []byte, p.Threads*2)
+		go producer(world, taskQueue)
+		multiThreadWorker(taskQueue)
 	}
+
 	return result
 }
 
