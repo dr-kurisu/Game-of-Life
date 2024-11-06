@@ -60,11 +60,11 @@ func producer(world [][]byte, taskQueue chan int) {
 }
 
 func multiThreadWorker(world, result [][]byte, taskQueue chan int, wg *sync.WaitGroup) {
+	defer wg.Done()
 	height := len(result)
 	width := len(result[0])
-	for {
-		line := <-taskQueue
-		// only region could cause race in assignment
+
+	for line := range taskQueue {
 		resultForTask := result[(line-1+height)%height : (line+1+height)%height]
 		worldForTask := world[line]
 
@@ -75,7 +75,6 @@ func multiThreadWorker(world, result [][]byte, taskQueue chan int, wg *sync.Wait
 				}
 			}
 		}
-		wg.Done()
 	}
 }
 
@@ -137,12 +136,10 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 	} else if p.Threads*3 < p.ImageHeight {
 		taskQueue := make(chan int, p.Threads*2)
 		go producer(world, taskQueue)
-		wgLocal := sync.WaitGroup{}
-		wgLocal.Add(p.ImageHeight)
 		for i := 0; i < p.Threads; i++ {
 			go multiThreadWorker(world, result, taskQueue, &wg)
 		}
-		wgLocal.Wait()
+		wg.Wait()
 	}
 	return result
 }
