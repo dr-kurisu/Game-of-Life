@@ -23,6 +23,11 @@ type controlChannels struct {
 	ticker *time.Ticker
 }
 
+type Task struct {
+	startY int
+	endY   int
+}
+
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
 
 func singleThreadWorker(world, result [][]byte) {
@@ -46,32 +51,39 @@ func singleThreadWorker(world, result [][]byte) {
 	}
 }
 
-func producer(world [][]byte, taskQueue chan int) {
+func producer(world [][]byte, taskQueue chan Task, threads int) {
+	interval := len(world)/threads - 3
 	// create a task from index 0, +3 each time, ignore visited index
-	for i := 0; i < len(world); i += 3 {
-		taskQueue <- i
+	for i := 0; i < len(world); i += 3 + interval {
+		taskQueue <- Task{i, i + interval}
 	}
-	for i := 1; i < len(world); i += 3 {
-		taskQueue <- i
+	for i := interval + 1; i < len(world); i += 3 {
+		taskQueue <- Task{i, i + 1}
 	}
-	for i := 2; i < len(world); i += 3 {
-		taskQueue <- i
+	for i := interval; i < len(world); i += 3 {
+		taskQueue <- Task{i, i + 1}
 	}
+	close(taskQueue)
 }
 
-func multiThreadWorker(world, result [][]byte, taskQueue chan int, wg *sync.WaitGroup) {
+func multiThreadWorker(world, result [][]byte, taskQueue chan Task, wg *sync.WaitGroup) {
 	defer wg.Done()
 	height := len(result)
 	width := len(result[0])
-
-	for line := range taskQueue {
-		resultForTask := result[(line-1+height)%height : (line+1+height)%height]
-		worldForTask := world[line]
-
-		for x := 0; x < width; x++ {
-			if worldForTask[x] == byte(255) {
-				for _, d := range dir {
-					resultForTask[d[0]+1][(d[1]+x+width)%width] += 1
+	for task := range taskQueue {
+		startY := task.startY
+		endY := task.endY
+		resultForTask := make([][]byte, 0)
+		for i := startY; i < endY+2; i++ {
+			resultForTask = append(resultForTask, world[(i-1+height)%height])
+		}
+		worldForTask := world[startY:endY]
+		for y := 0; y < endY-startY; y++ {
+			for x := 0; x < width; x++ {
+				if worldForTask[y][x] == byte(255) {
+					for _, d := range dir {
+						resultForTask[d[0]+1+y][(d[1]+x+width)%width] += 1
+					}
 				}
 			}
 		}
@@ -127,19 +139,24 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 		result[i] = make([]byte, p.ImageWidth)
 	}
 
-	// wg used to control each thread
-	wg := sync.WaitGroup{}
-	wg.Add(p.Threads)
-
-	if p.Threads > 0 {
+	if p.Threads == 1 {
 		singleThreadWorker(world, result)
-	} else if p.Threads*3 < p.ImageHeight {
-		taskQueue := make(chan int, p.Threads*2)
-		go producer(world, taskQueue)
+	} else {
+		wg := sync.WaitGroup{}
+		wg.Add(p.Threads)
+		taskQueue := make(chan Task, p.ImageHeight)
 		for i := 0; i < p.Threads; i++ {
 			go multiThreadWorker(world, result, taskQueue, &wg)
 		}
+		producer(world, taskQueue, p.Threads)
 		wg.Wait()
+		for y := 0; y < p.ImageHeight; y++ {
+			for x := 0; x < p.ImageWidth; x++ {
+				if result[y][x] == byte(3) || (result[y][x] == byte(2) && world[y][x] == byte(255)) {
+					result[y][x] = byte(255)
+				}
+			}
+		}
 	}
 	return result
 }
