@@ -5,6 +5,9 @@ type Request struct {
 	Turn  int
 	P     Params
 }
+
 type Response struct {
 	World [][]byte
 }
+
+type NoParams struct{}

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net"
 	"net/rpc"
+	"os"
 	"sync"
+	"syscall"
 )
 
 type Operator struct{}
@@ -12,6 +14,8 @@ type Operator struct{}
 var world [][]byte
 
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
+
+var killChan = make(chan bool)
 
 //these functions are used to simulate the turns of Game of Life
 func worker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
@@ -66,6 +70,11 @@ func centralDistributor(world [][]byte, p Params, turn int) [][]byte {
 	return result
 }
 
+func (a *Operator) Kill(request NoParams, response *NoParams) error {
+	killChan <- true
+	return nil
+}
+
 func (a *Operator) DistributeWorker(request Request, response *Response) error {
 	world = centralDistributor(request.World, request.P, request.Turn)
 	// send world
@@ -86,5 +95,14 @@ func server() {
 	}
 	listener, _ := net.Listen("tcp", ":8030")
 	fmt.Println("Server is listening on port", "8030")
+	go func() {
+		<-killChan
+		// simulate interrupt signal
+		fmt.Println("--- received killed signal ---")
+		err = syscall.Kill(os.Getpid(), syscall.SIGINT)
+		if err != nil {
+			panic(err)
+		}
+	}()
 	rpc.Accept(listener)
 }

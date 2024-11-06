@@ -27,6 +27,11 @@ type PauseResponse struct {
 	Turn int
 }
 
+type CellFlipResponse struct {
+	Cells []util.Cell
+	Turn  int
+}
+
 type TickerResponse struct {
 	AliveNum int
 	Turn     int

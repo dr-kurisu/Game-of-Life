@@ -128,6 +128,20 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 	pause := false
 	broker := brokerC.broker
 	call := brokerC.call
+	go func() {
+		for {
+			response := CellFlipResponse{}
+			err := broker.Call("Operator.CellFlip", struct{}{}, &response)
+			if err != nil {
+				panic(err)
+			}
+			c.events <- CellsFlipped{
+				CompletedTurns: response.Turn,
+				Cells:          response.Cells,
+			}
+			c.events <- TurnComplete{CompletedTurns: response.Turn}
+		}
+	}()
 	for {
 		select {
 		case <-call.Done:
@@ -210,32 +224,6 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 			c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: filename}
 		}
 	}
-}
-
-func cellFlipHandling(world [][]byte, result [][]byte, p Params, c distributorChannels, turn int) {
-	var wg sync.WaitGroup
-	yInterval := p.ImageHeight / p.Threads
-	ys := 0
-	ye := yInterval
-	wg.Add(p.Threads)
-	for i := 0; i < p.Threads; i++ {
-		if i == p.Threads-1 {
-			ye = p.ImageHeight
-		}
-		go func(ys, ye int) {
-			defer wg.Done()
-			for y := ys; y < ye; y++ {
-				for x := 0; x < p.ImageWidth; x++ {
-					if world[y][x] != byte(255) && result[y][x] == byte(255) || world[y][x] == byte(255) && result[y][x] != byte(255) {
-						c.events <- CellFlipped{CompletedTurns: turn, Cell: util.Cell{X: x, Y: y}}
-					}
-				}
-			}
-		}(ys, ye)
-		ys += yInterval
-		ye += yInterval
-	}
-	wg.Wait()
 }
 
 // distributor divides the work between workers and interacts with other goroutines.

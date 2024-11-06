@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net"
 	"net/rpc"
+	"os"
 	"sync"
+	"syscall"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
@@ -13,15 +15,18 @@ type Operator struct{}
 var pauseChan = make(chan bool, 1)
 var quitChan = make(chan bool, 1)
 var saveChan = make(chan bool, 1)
-var killChan = make(chan bool, 1)
+var killChan = make(chan bool)
 var worldChan = make(chan [][]byte)
 var ticker = make(chan bool, 1)
+var comapreComplete = make(chan bool)
+var turnComplete = make(chan bool, 1)
 
 var pause = false
 var kill = false
 var turn = 0
 var threads = 1
 var clients []*rpc.Client
+var differentCells []util.Cell
 
 func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker) error {
 	// deal with connection
@@ -51,7 +56,8 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 	for i := 0; i < request.P.Turns; i++ {
 		turn = i + 1
 		world = broker(world, clients, i, request.P)
-		turn = i + 1
+		turnComplete <- true
+		<-comapreComplete
 		for {
 			select {
 			case <-ticker:
@@ -67,6 +73,9 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 				fmt.Println("Received save signal")
 				worldChan <- world
 			default:
+			}
+			if kill {
+				return nil
 			}
 			if !pause || quit {
 				break
@@ -88,6 +97,14 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 	response.FinalTurns = finalTurns
 	//fmt.Println("After", finalTurns, "turns, there are", len(response.Cells), "cells")
 	//fmt.Println()
+	return nil
+}
+
+func (a *Operator) CellFlip(request NoParams, response *CellFlipResponse) error {
+	<-turnComplete
+	response.Turn = turn
+	response.Cells = differentCells
+	comapreComplete <- true
 	return nil
 }
 
@@ -210,7 +227,36 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 		}()
 	}
 	wg.Wait()
+	// compare result and world
+	differentCells = make([]util.Cell, 0)
+	cellFlipHandling(world, result, p)
 	return result
+}
+
+func cellFlipHandling(world [][]byte, result [][]byte, p Params) {
+	var wg sync.WaitGroup
+	yInterval := p.ImageHeight / p.Threads
+	ys := 0
+	ye := yInterval
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		if i == p.Threads-1 {
+			ye = p.ImageHeight
+		}
+		go func(ys, ye int) {
+			defer wg.Done()
+			for y := ys; y < ye; y++ {
+				for x := 0; x < p.ImageWidth; x++ {
+					if world[y][x] != byte(255) && result[y][x] == byte(255) || world[y][x] == byte(255) && result[y][x] != byte(255) {
+						differentCells = append(differentCells, util.Cell{X: x, Y: y})
+					}
+				}
+			}
+		}(ys, ye)
+		ys += yInterval
+		ye += yInterval
+	}
+	wg.Wait()
 }
 
 func server() {
@@ -221,6 +267,22 @@ func server() {
 	}
 	listener, _ := net.Listen("tcp", ":8031")
 	fmt.Println("Server is listening on port", "8031")
-
+	go func() {
+		<-killChan
+		// tell servers to close as well
+		for _, client := range clients {
+			err = client.Call("Operator.Kill", struct{}{}, nil)
+			if err != nil {
+				panic(err)
+			}
+		}
+		// simulate interrupt signal
+		fmt.Println("--- received killed signal ---")
+		err = syscall.Kill(os.Getpid(), syscall.SIGINT)
+		if err != nil {
+			panic(err)
+		}
+	}()
 	rpc.Accept(listener)
+
 }

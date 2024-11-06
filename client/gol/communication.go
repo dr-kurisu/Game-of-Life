@@ -19,6 +19,11 @@ type TickerResponse struct {
 	Turn     int
 }
 
+type CellFlipResponse struct {
+	Cells []util.Cell
+	Turn  int
+}
+
 type PauseResponse struct {
 	Turn int
 }
