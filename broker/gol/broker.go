@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/rpc"
 	"sync"
+	"uk.ac.bris.cs/gameoflife/util"
 )
 
 type Operator struct{}
@@ -12,15 +13,20 @@ type Operator struct{}
 var pauseChan = make(chan bool, 1)
 var quitChan = make(chan bool, 1)
 var saveChan = make(chan bool, 1)
-var ticker = make(chan bool, 2)
-var pause = false
+var killChan = make(chan bool, 1)
 var worldChan = make(chan [][]byte)
+var ticker = make(chan bool, 1)
+
+var pause = false
+var kill = false
 var turn = 0
 var threads = 1
+var clients []*rpc.Client
 
 func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker) error {
 	// deal with connection
-	clients := make([]*rpc.Client, len(request.Ports))
+	//fmt.Println("Broker is running")
+	clients = make([]*rpc.Client, len(request.Ports))
 	for i := 0; i < len(clients); i++ {
 		client, err := rpc.Dial("tcp", request.Ports[i])
 		if err != nil {
@@ -28,22 +34,37 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 		}
 		clients[i] = client
 	}
+	//fmt.Println("Establish connection with servers")
+	//fmt.Println("received Alive cells: ", len(request.Cells))
+	// init of var
 	threads = request.P.Threads
-	var world [][]byte
+	world := make([][]byte, request.P.ImageHeight)
+	for i := 0; i < len(world); i++ {
+		world[i] = make([]byte, request.P.ImageWidth)
+	}
 	finalTurns := request.P.Turns
 	quit := false
+	for _, cell := range request.Cells {
+		world[cell.Y][cell.X] = byte(255)
+	}
+	// start working with evolution
 	for i := 0; i < request.P.Turns; i++ {
-		world = broker(request.World, clients, i, request.P)
+		turn = i + 1
+		world = broker(world, clients, i, request.P)
 		turn = i + 1
 		for {
 			select {
 			case <-ticker:
+				fmt.Println("Received ticker signal")
 				worldChan <- world
 			case <-pauseChan:
+				fmt.Println("Received pause signal")
 				pause = !pause
 			case <-quitChan:
+				fmt.Println("Received quit signal")
 				quit = true
 			case <-saveChan:
+				fmt.Println("Received save signal")
 				worldChan <- world
 			default:
 			}
@@ -56,19 +77,22 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 			break
 		}
 	}
-
-	response.World = make([][]byte, len(world))
+	response.Cells = make([]util.Cell, 0)
 	for i := range world {
-		response.World[i] = make([]byte, len(world[i]))
-		copy(response.World[i], world[i])
+		for j := range world[i] {
+			if world[i][j] == byte(255) {
+				response.Cells = append(response.Cells, util.Cell{X: j, Y: i})
+			}
+		}
 	}
 	response.FinalTurns = finalTurns
+	//fmt.Println("After", finalTurns, "turns, there are", len(response.Cells), "cells")
+	//fmt.Println()
 	return nil
 }
 
 func (a *Operator) Pause(request NoParams, response *PauseResponse) error {
 	pauseChan <- pause
-	// Turn 有点问题
 	response.Turn = turn
 	return nil
 }
@@ -76,10 +100,13 @@ func (a *Operator) Pause(request NoParams, response *PauseResponse) error {
 func (a *Operator) Save(request NoParams, response *ResponseBroker) error {
 	saveChan <- true
 	world := <-worldChan
-	response.World = make([][]byte, len(world))
+	response.Cells = make([]util.Cell, 0)
 	for i := range world {
-		response.World[i] = make([]byte, len(world[i]))
-		copy(response.World[i], world[i])
+		for j := range world[i] {
+			if world[i][j] == byte(255) {
+				response.Cells = append(response.Cells, util.Cell{X: i, Y: j})
+			}
+		}
 	}
 	response.FinalTurns = turn
 	return nil
@@ -87,10 +114,16 @@ func (a *Operator) Save(request NoParams, response *ResponseBroker) error {
 
 func (a *Operator) Ticker(request NoParams, response *TickerResponse) error {
 	ticker <- true
+	response.Turn = turn
 	world := <-worldChan
 	nums := aliveCounter(world, threads)
 	response.AliveNum = nums
-	response.Turn = turn
+	return nil
+}
+
+func (a *Operator) Kill(request NoParams, response *NoParams) error {
+	killChan <- true
+	kill = true
 	return nil
 }
 
@@ -163,7 +196,11 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 			defer wg.Done()
 			err := client.Call("Operator.DistributeWorker", request, &response)
 			if err != nil {
-				panic(err)
+				if kill {
+					return
+				} else {
+					panic(err)
+				}
 			}
 			for j := 0; j < len(response.World); j++ {
 				for k := 0; k < len(response.World[j]); k++ {
@@ -184,5 +221,6 @@ func server() {
 	}
 	listener, _ := net.Listen("tcp", ":8031")
 	fmt.Println("Server is listening on port", "8031")
+
 	rpc.Accept(listener)
 }

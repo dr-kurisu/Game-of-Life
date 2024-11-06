@@ -1,14 +1,16 @@
 package gol
 
+import "uk.ac.bris.cs/gameoflife/util"
+
 type RequestBroker struct {
-	World [][]byte
+	Cells []util.Cell
 	Ports []string
 	Turn  int
 	P     Params
 }
 
 type ResponseBroker struct {
-	World      [][]byte
+	Cells      []util.Cell
 	FinalTurns int
 }
 

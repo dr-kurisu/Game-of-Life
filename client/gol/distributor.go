@@ -3,6 +3,7 @@ package gol
 import (
 	"fmt"
 	"net/rpc"
+	"sort"
 	"sync"
 	"time"
 	"uk.ac.bris.cs/gameoflife/util"
@@ -21,40 +22,14 @@ type controlChannels struct {
 	pause  chan bool
 	quit   chan bool
 	save   chan bool
+	kill   chan bool
 	ticker *time.Ticker
 }
 
-func aliveCounter(world [][]byte, p Params) int {
-	result := 0
-	var mutex sync.Mutex
-	var wg sync.WaitGroup
-	yInterval := p.ImageHeight / p.Threads
-	ys := 0
-	ye := yInterval
-	wg.Add(p.Threads)
-	for i := 0; i < p.Threads; i++ {
-		if i == p.Threads-1 {
-			ye = p.ImageHeight
-		}
-		go func(ys, ye int) {
-			defer wg.Done()
-			localResult := 0
-			for y := ys; y < ye; y++ {
-				for x := 0; x < p.ImageWidth; x++ {
-					if world[y][x] == byte(255) {
-						localResult += 1
-					}
-				}
-			}
-			mutex.Lock()
-			result += localResult
-			mutex.Unlock()
-		}(ys, ye)
-		ys += yInterval
-		ye += yInterval
-	}
-	wg.Wait()
-	return result
+type brokerCommunicate struct {
+	broker   *rpc.Client
+	call     *rpc.Call
+	response *ResponseBroker
 }
 
 func checker(world [][]byte, p Params) []util.Cell {
@@ -91,15 +66,38 @@ func checker(world [][]byte, p Params) []util.Cell {
 }
 
 func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
-	Alive := 0
 	c.ioCommand <- ioOutput
 	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turn)
 	c.ioFilename <- filename
 	for i := 0; i < p.ImageHeight; i++ {
 		for j := 0; j < p.ImageWidth; j++ {
 			if world[i][j] == byte(255) {
-				Alive++
 				c.ioOutput <- byte(255)
+			} else {
+				c.ioOutput <- byte(0)
+			}
+		}
+	}
+	return filename
+}
+
+func outputWithCells(cells []util.Cell, c *distributorChannels, p Params, turn int) string {
+	c.ioCommand <- ioOutput
+	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turn)
+	c.ioFilename <- filename
+	// sort cells in order of Y and second order of X
+	sort.Slice(cells, func(i, j int) bool {
+		if cells[i].Y != cells[j].Y {
+			return cells[i].Y < cells[j].Y
+		}
+		return cells[i].X < cells[j].X
+	})
+	counter := 0
+	for y := 0; y < p.ImageHeight; y++ {
+		for x := 0; x < p.ImageWidth; x++ {
+			if counter < len(cells) && cells[counter].Y == y && cells[counter].X == x {
+				c.ioOutput <- byte(255)
+				counter++
 			} else {
 				c.ioOutput <- byte(0)
 			}
@@ -118,21 +116,50 @@ func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
 			controlChan.quit <- true
 		case 'p':
 			controlChan.pause <- true
+		case 'k':
+			controlChan.kill <- true
 		default:
 			panic("Wrong input from keyboard")
 		}
 	}
 }
 
-func handlingEvent(controlChan *controlChannels, c distributorChannels, world [][]byte, p Params, broker *rpc.Client) {
+func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params, brokerC *brokerCommunicate) {
 	pause := false
+	broker := brokerC.broker
+	call := brokerC.call
 	for {
 		select {
+		case <-call.Done:
+			// when broker is done
+			fmt.Println("Broker is done")
+			cells := brokerC.response.Cells
+			finalTurns := brokerC.response.FinalTurns
+			c.events <- FinalTurnComplete{finalTurns, cells}
+			filename := outputWithCells(cells, &c, p, finalTurns)
+			c.ioCommand <- ioCheckIdle
+			<-c.ioIdle
+			c.events <- ImageOutputComplete{
+				CompletedTurns: brokerC.response.FinalTurns,
+				Filename:       filename,
+			}
+			return
+
 		case <-controlChan.quit:
+			fmt.Println("Quiting")
 			err := broker.Call("Operator.Quit", struct{}{}, &struct{}{})
 			if err != nil {
 				panic(err)
 			}
+			return
+		case <-controlChan.kill:
+			fmt.Println("Killing")
+			err := broker.Call("Operator.Kill", struct{}{}, &struct{}{})
+			if err != nil {
+				return
+			}
+			return
+
 		case <-controlChan.ticker.C:
 			response := TickerResponse{}
 			err := broker.Call("Operator.Ticker", struct{}{}, &response)
@@ -143,33 +170,46 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, world []
 		case <-controlChan.pause:
 			pause = !pause
 			if pause {
+				fmt.Println("Continuing")
 				response := PauseResponse{}
 				err := broker.Call("Operator.Pause", struct{}{}, &response)
 				if err != nil {
 					panic(err)
 				}
 				c.events <- StateChange{response.Turn, Paused}
-				err := broker.Call("Operator.Quit", struct{}{}, &struct{}{})
-				if err != nil {
-					return false
-				}
 			} else {
-				c.events <- StateChange{round, Executing}
+				fmt.Println("Continue")
+				response := PauseResponse{}
+				err := broker.Call("Operator.Pause", struct{}{}, &response)
+				if err != nil {
+					panic(err)
+				}
+				c.events <- StateChange{response.Turn, Executing}
 			}
-		case <-controlChan.save: // deal with saving
-			filename := output(world, &c, p, round+1)
+		case <-controlChan.save:
+			response := ResponseBroker{}
+			result := make([][]byte, p.ImageHeight)
+			for y := 0; y < p.ImageHeight; y++ {
+				result[y] = make([]byte, p.ImageWidth)
+			}
+			err := broker.Call("Operator.Save", struct{}{}, &response)
+			if err != nil {
+				panic(err)
+			}
+			// assign result used to output
+			for _, cell := range response.Cells {
+				result[cell.Y][cell.X] = byte(255)
+			}
+			finalTurns := response.FinalTurns
+
+			filename := output(result, &c, p, response.FinalTurns)
 			c.ioCommand <- ioCheckIdle
 			select {
 			case <-c.ioIdle:
 			}
-			c.events <- ImageOutputComplete{CompletedTurns: round, Filename: filename}
-		default:
-		}
-		if quit {
-			break
+			c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: filename}
 		}
 	}
-	return false
 }
 
 func cellFlipHandling(world [][]byte, result [][]byte, p Params, c distributorChannels, turn int) {
@@ -225,50 +265,31 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	}
 
 	turn := 0
-	finalTurns := p.Turns
 	// TODO: Execute all turns of the Game of Life.
 	// let server run the task and receive world in each round
 	c.events <- StateChange{turn, Executing}
-	GameQuit := false
-	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool), time.NewTicker(2 * time.Second)}
+	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool), make(chan bool), time.NewTicker(2 * time.Second)}
 	go keyBoardDetection(keyPresses, controlChan)
 
 	request := RequestBroker{
-		World: make([][]byte, p.ImageHeight),
+		Cells: checker(world, p),
 		Ports: ports,
 		P:     p,
 	}
 
-	for i := 0; i < p.ImageHeight; i++ {
-		request.World[i] = make([]byte, p.ImageWidth)
-		copy(request.World[i], world[i])
-	}
-
 	response := ResponseBroker{}
-	broker.Go("Operator.BrokerWorker", request, &response, nil)
-
-	// when broker is done
-	for i := 0; i < p.ImageHeight; i++ {
-		copy(result[i], response.World[i])
-	}
-	cellFlipHandling(world, result, p, c, turn+1)
-	c.events <- TurnComplete{i + 1}
-	handlingEvent(&controlChan, c, &finalTurns, world, p, broker)
-	// output as pgm file
-	outputFileName := output(world, &c, p, finalTurns)
-	c.ioCommand <- ioCheckIdle
-	<-c.ioIdle
-	c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: outputFileName}
-
-	// TODO: Report the final state using FinalTurnCompleteEvent.
-	c.events <- FinalTurnComplete{finalTurns, checker(world, p)}
+	call := broker.Go("Operator.BrokerWorker", request, &response, nil)
+	brokerC := brokerCommunicate{}
+	brokerC.broker = broker
+	brokerC.call = call
+	brokerC.response = &response
+	handlingEvent(&controlChan, c, p, &brokerC)
+	//fmt.Println("Quit")
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle
-
 	c.events <- StateChange{turn, Quitting}
-
 	// Close the channel to stop the SDL goroutine gracefully. Removing may cause deadlock.
 	close(c.events)
 }
