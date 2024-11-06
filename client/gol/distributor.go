@@ -124,24 +124,37 @@ func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
 	}
 }
 
-func handlingEvent(controlChan *controlChannels, c distributorChannels, finalTurns *int, world [][]byte, p Params, round int) bool {
-	quit := true
+func handlingEvent(controlChan *controlChannels, c distributorChannels, world [][]byte, p Params, broker *rpc.Client) {
 	pause := false
 	for {
 		select {
 		case <-controlChan.quit:
-			*finalTurns = round + 1
-			return true
+			err := broker.Call("Operator.Quit", struct{}{}, &struct{}{})
+			if err != nil {
+				panic(err)
+			}
 		case <-controlChan.ticker.C:
-			c.events <- AliveCellsCount{CompletedTurns: round + 1, CellsCount: aliveCounter(world, p)}
+			response := TickerResponse{}
+			err := broker.Call("Operator.Ticker", struct{}{}, &response)
+			if err != nil {
+				panic(err)
+			}
+			c.events <- AliveCellsCount{CompletedTurns: response.Turn, CellsCount: response.AliveNum}
 		case <-controlChan.pause:
 			pause = !pause
 			if pause {
-				c.events <- StateChange{round, Paused}
-				quit = false
+				response := PauseResponse{}
+				err := broker.Call("Operator.Pause", struct{}{}, &response)
+				if err != nil {
+					panic(err)
+				}
+				c.events <- StateChange{response.Turn, Paused}
+				err := broker.Call("Operator.Quit", struct{}{}, &struct{}{})
+				if err != nil {
+					return false
+				}
 			} else {
 				c.events <- StateChange{round, Executing}
-				quit = true
 			}
 		case <-controlChan.save: // deal with saving
 			filename := output(world, &c, p, round+1)
@@ -201,6 +214,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	}
 	// Flip cells
 	c.events <- CellsFlipped{0, checker(world, p)}
+
 	// define of ports
 	ports := make([]string, 1)
 	ports[0] = "localhost:8030" // Ip to be confirmed
@@ -209,6 +223,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	if err != nil {
 		panic(err)
 	}
+
 	turn := 0
 	finalTurns := p.Turns
 	// TODO: Execute all turns of the Game of Life.
@@ -218,41 +233,27 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool), time.NewTicker(2 * time.Second)}
 	go keyBoardDetection(keyPresses, controlChan)
 
-	for i := 0; i < p.Turns; i++ {
-		// __________________________change_______________________________
-		// call function in broker
-		request := RequestBroker{
-			World: make([][]byte, p.ImageHeight),
-			Ports: ports,
-			Turn:  i,
-			P:     p,
-		}
-		result := make([][]byte, p.ImageHeight)
-		for i := 0; i < p.ImageHeight; i++ {
-			result[i] = make([]byte, p.ImageWidth)
-		}
-
-		for i := 0; i < p.ImageHeight; i++ {
-			request.World[i] = make([]byte, p.ImageWidth)
-			copy(request.World[i], world[i])
-		}
-
-		response := ResponseBroker{}
-		err := broker.Call("Operator.BrokerWorker", request, &response)
-		if err != nil {
-			panic(err)
-		}
-		for i := 0; i < p.ImageHeight; i++ {
-			copy(result[i], response.World[i])
-		}
-		cellFlipHandling(world, result, p, c, turn+1)
-		world = result
-		c.events <- TurnComplete{i + 1}
-		GameQuit = handlingEvent(&controlChan, c, &finalTurns, world, p, i)
-		if GameQuit {
-			break
-		}
+	request := RequestBroker{
+		World: make([][]byte, p.ImageHeight),
+		Ports: ports,
+		P:     p,
 	}
+
+	for i := 0; i < p.ImageHeight; i++ {
+		request.World[i] = make([]byte, p.ImageWidth)
+		copy(request.World[i], world[i])
+	}
+
+	response := ResponseBroker{}
+	broker.Go("Operator.BrokerWorker", request, &response, nil)
+
+	// when broker is done
+	for i := 0; i < p.ImageHeight; i++ {
+		copy(result[i], response.World[i])
+	}
+	cellFlipHandling(world, result, p, c, turn+1)
+	c.events <- TurnComplete{i + 1}
+	handlingEvent(&controlChan, c, &finalTurns, world, p, broker)
 	// output as pgm file
 	outputFileName := output(world, &c, p, finalTurns)
 	c.ioCommand <- ioCheckIdle

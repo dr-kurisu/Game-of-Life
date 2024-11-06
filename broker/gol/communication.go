@@ -17,5 +17,17 @@ type RequestBroker struct {
 }
 
 type ResponseBroker struct {
-	World [][]byte
+	World      [][]byte
+	FinalTurns int
 }
+
+type PauseResponse struct {
+	Turn int
+}
+
+type TickerResponse struct {
+	AliveNum int
+	Turn     int
+}
+
+type NoParams struct{}
