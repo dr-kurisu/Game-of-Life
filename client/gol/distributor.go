@@ -133,6 +133,9 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 		for {
 			response := CellFlipResponse{}
 			err := broker.Call("Operator.CellFlip", struct{}{}, &response)
+			//result := make([]util.Cell, len(response.Cells))
+			//copy(result, response.Cells)
+
 			if err != nil {
 				panic(err)
 			}

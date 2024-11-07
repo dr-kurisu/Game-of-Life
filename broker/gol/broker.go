@@ -30,7 +30,6 @@ var differentCells []util.Cell
 
 func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker) error {
 	// deal with connection
-	//fmt.Println("Broker is running")
 	clients = make([]*rpc.Client, len(request.Ports))
 	for i := 0; i < len(clients); i++ {
 		client, err := rpc.Dial("tcp", request.Ports[i])
@@ -39,8 +38,6 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 		}
 		clients[i] = client
 	}
-	//fmt.Println("Establish connection with servers")
-	//fmt.Println("received Alive cells: ", len(request.Cells))
 	// init of var
 	threads = request.P.Threads
 	world := make([][]byte, request.P.ImageHeight)
@@ -54,6 +51,7 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 	}
 	// start working with evolution
 	for i := 0; i < request.P.Turns; i++ {
+
 		turn = i + 1
 		world = broker(world, clients, i, request.P)
 		turnComplete <- true
@@ -95,8 +93,6 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 		}
 	}
 	response.FinalTurns = finalTurns
-	//fmt.Println("After", finalTurns, "turns, there are", len(response.Cells), "cells")
-	//fmt.Println()
 	return nil
 }
 
@@ -234,29 +230,13 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 }
 
 func cellFlipHandling(world [][]byte, result [][]byte, p Params) {
-	var wg sync.WaitGroup
-	yInterval := p.ImageHeight / p.Threads
-	ys := 0
-	ye := yInterval
-	wg.Add(p.Threads)
-	for i := 0; i < p.Threads; i++ {
-		if i == p.Threads-1 {
-			ye = p.ImageHeight
-		}
-		go func(ys, ye int) {
-			defer wg.Done()
-			for y := ys; y < ye; y++ {
-				for x := 0; x < p.ImageWidth; x++ {
-					if world[y][x] != byte(255) && result[y][x] == byte(255) || world[y][x] == byte(255) && result[y][x] != byte(255) {
-						differentCells = append(differentCells, util.Cell{X: x, Y: y})
-					}
-				}
+	for y := 0; y < p.ImageHeight; y++ {
+		for x := 0; x < p.ImageWidth; x++ {
+			if world[y][x] != byte(255) && result[y][x] == byte(255) || world[y][x] == byte(255) && result[y][x] != byte(255) {
+				differentCells = append(differentCells, util.Cell{X: x, Y: y})
 			}
-		}(ys, ye)
-		ys += yInterval
-		ye += yInterval
+		}
 	}
-	wg.Wait()
 }
 
 func server() {
