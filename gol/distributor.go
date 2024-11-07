@@ -23,9 +23,10 @@ type controlChannels struct {
 	ticker *time.Ticker
 }
 
-type Task struct {
-	startY int
-	endY   int
+type Result struct {
+	result [][]byte
+	up     []byte
+	down   []byte
 }
 
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
@@ -51,39 +52,40 @@ func singleThreadWorker(world, result [][]byte) {
 	}
 }
 
-func producer(world [][]byte, taskQueue chan Task, threads int) {
-	interval := len(world)/threads - 3
-	// create a task from index 0, +3 each time, ignore visited index
-	for i := 0; i < len(world); i += 3 + interval {
-		taskQueue <- Task{i, i + interval}
-	}
-	for i := interval + 1; i < len(world); i += 3 {
-		taskQueue <- Task{i, i + 1}
-	}
-	for i := interval; i < len(world); i += 3 {
-		taskQueue <- Task{i, i + 1}
-	}
-	close(taskQueue)
-}
-
-func multiThreadWorker(world, result [][]byte, taskQueue chan Task, wg *sync.WaitGroup) {
+func multiThreadWorker(partWorld [][]byte, result Result, startY, endY int, wg *sync.WaitGroup) {
 	defer wg.Done()
-	height := len(result)
-	width := len(result[0])
-	for task := range taskQueue {
-		startY := task.startY
-		endY := task.endY
-		resultForTask := make([][]byte, 0)
-		for i := startY; i < endY+2; i++ {
-			resultForTask = append(resultForTask, world[(i-1+height)%height])
+	width := len(partWorld[0])
+	height := len(partWorld)
+	// deal with the first line
+	for x := 0; x < len(partWorld[0]); x++ {
+		if partWorld[0][x] == byte(255) {
+			for _, d := range dir {
+				if d[0] == -1 {
+					result.up[(x+d[1]+width)%width] += 1
+				} else {
+					result.result[d[0]][(x+d[1]+width)%width] += 1
+				}
+			}
 		}
-		worldForTask := world[startY:endY]
-		for y := 0; y < endY-startY; y++ {
-			for x := 0; x < width; x++ {
-				if worldForTask[y][x] == byte(255) {
-					for _, d := range dir {
-						resultForTask[d[0]+1+y][(d[1]+x+width)%width] += 1
-					}
+	}
+	// deal with the last line
+	for x := 0; x < height; x++ {
+		if partWorld[height-1][x] == byte(255) {
+			for _, d := range dir {
+				if d[0] == 1 {
+					result.down[(x+d[1]+width)%width] += 1
+				} else {
+					result.result[height-1+d[0]][(x+d[1]+width)%width] += 1
+				}
+			}
+		}
+	}
+	// deal with remaining
+	for y := 1; y < endY-startY-1; y++ {
+		for x := 0; x < len(partWorld[0]); x++ {
+			if partWorld[y][x] == byte(255) {
+				for _, d := range dir {
+					result.result[y+d[0]][(x+d[1]+len(partWorld))%len(partWorld)] += 1
 				}
 			}
 		}
@@ -139,17 +141,37 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 		result[i] = make([]byte, p.ImageWidth)
 	}
 
-	if p.Threads == 1 {
+	if p.Threads == 1 || p.ImageHeight/p.Threads < 4 {
 		singleThreadWorker(world, result)
 	} else {
+		interval := p.ImageHeight / p.Threads
+		results := make([]Result, p.Threads)
 		wg := sync.WaitGroup{}
 		wg.Add(p.Threads)
-		taskQueue := make(chan Task, p.ImageHeight)
 		for i := 0; i < p.Threads; i++ {
-			go multiThreadWorker(world, result, taskQueue, &wg)
+			startY := interval * i
+			endY := startY + interval
+			if i == p.Threads-1 {
+				endY = p.ImageHeight
+			}
+			// create efficient pointer for result
+			results[i] = Result{
+				result: result[startY:endY],
+				up:     make([]byte, p.ImageWidth),
+				down:   make([]byte, p.ImageWidth),
+			}
+			go multiThreadWorker(world[startY:endY], results[i], startY, endY, &wg)
 		}
-		producer(world, taskQueue, p.Threads)
 		wg.Wait()
+		// combine results
+		for i, r := range results {
+			startY := interval * i
+			endY := startY + interval
+			for x := 0; x < p.ImageWidth; x++ {
+				result[(startY-1+p.ImageHeight)%p.ImageHeight][x] += r.up[x]
+				result[(endY-1+p.ImageHeight)%p.ImageHeight][x] += r.down[x]
+			}
+		}
 		for y := 0; y < p.ImageHeight; y++ {
 			for x := 0; x < p.ImageWidth; x++ {
 				if result[y][x] == byte(3) || (result[y][x] == byte(2) && world[y][x] == byte(255)) {
@@ -252,9 +274,9 @@ func checker(world [][]byte, p Params) []util.Cell {
 	result := make([]util.Cell, 0)
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
-	y_interval := p.ImageHeight / p.Threads
+	yInterval := p.ImageHeight / p.Threads
 	ys := 0
-	ye := y_interval
+	ye := yInterval
 	wg.Add(p.Threads)
 	for i := 0; i < p.Threads; i++ {
 		if i == p.Threads-1 {
@@ -274,8 +296,8 @@ func checker(world [][]byte, p Params) []util.Cell {
 			result = append(result, localResult...)
 			mutex.Unlock()
 		}(ys, ye)
-		ys += y_interval
-		ye += y_interval
+		ys += yInterval
+		ye += yInterval
 	}
 	wg.Wait()
 	return result
