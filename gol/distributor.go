@@ -57,7 +57,7 @@ func multiThreadWorker(partWorld [][]byte, result Result, startY, endY int, wg *
 	width := len(partWorld[0])
 	height := len(partWorld)
 	// deal with the first line
-	for x := 0; x < len(partWorld[0]); x++ {
+	for x := 0; x < width; x++ {
 		if partWorld[0][x] == byte(255) {
 			for _, d := range dir {
 				if d[0] == -1 {
@@ -69,7 +69,7 @@ func multiThreadWorker(partWorld [][]byte, result Result, startY, endY int, wg *
 		}
 	}
 	// deal with the last line
-	for x := 0; x < height; x++ {
+	for x := 0; x < width; x++ {
 		if partWorld[height-1][x] == byte(255) {
 			for _, d := range dir {
 				if d[0] == 1 {
@@ -81,11 +81,11 @@ func multiThreadWorker(partWorld [][]byte, result Result, startY, endY int, wg *
 		}
 	}
 	// deal with remaining
-	for y := 1; y < endY-startY-1; y++ {
-		for x := 0; x < len(partWorld[0]); x++ {
+	for y := 1; y < height-1; y++ {
+		for x := 0; x < width; x++ {
 			if partWorld[y][x] == byte(255) {
 				for _, d := range dir {
-					result.result[y+d[0]][(x+d[1]+len(partWorld))%len(partWorld)] += 1
+					result.result[y+d[0]][(x+d[1]+width)%width] += 1
 				}
 			}
 		}
@@ -141,7 +141,8 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 		result[i] = make([]byte, p.ImageWidth)
 	}
 
-	if p.Threads == 1 || p.ImageHeight/p.Threads < 4 {
+	//if p.Threads == 1 || p.ImageHeight/p.Threads < 4 {
+	if p.Threads > 0 {
 		singleThreadWorker(world, result)
 	} else {
 		interval := p.ImageHeight / p.Threads
@@ -164,14 +165,16 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 		}
 		wg.Wait()
 		// combine results
-		for i, r := range results {
-			startY := interval * i
-			endY := startY + interval
-			for x := 0; x < p.ImageWidth; x++ {
-				result[(startY-1+p.ImageHeight)%p.ImageHeight][x] += r.up[x]
-				result[(endY-1+p.ImageHeight)%p.ImageHeight][x] += r.down[x]
-			}
-		}
+		//for i, r := range results {
+		//startY := interval * i
+		//endY := startY + interval
+		//if i == len(result)-1 {
+		//	endY = p.ImageHeight
+		//}
+		//for x := 0; x < p.ImageWidth; x++ {
+		//	result[(startY-1+p.ImageHeight)%p.ImageHeight][x] += r.up[x]
+		//	result[(endY+p.ImageHeight)%p.ImageHeight][x] += r.down[x]
+		//}
 		for y := 0; y < p.ImageHeight; y++ {
 			for x := 0; x < p.ImageWidth; x++ {
 				if result[y][x] == byte(3) || (result[y][x] == byte(2) && world[y][x] == byte(255)) {
@@ -317,8 +320,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	for index := 0; index < p.ImageHeight*p.ImageWidth; index++ {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
-	aliveCells := checker(world, p)
-	c.events <- CellsFlipped{0, aliveCells}
+	c.events <- CellsFlipped{0, checker(world, p)}
 	c.events <- StateChange{turn, Executing}
 
 	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool, 1), time.NewTicker(2 * time.Second)}
