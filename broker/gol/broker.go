@@ -266,7 +266,7 @@ func server() {
 		return
 	}
 	listener, _ := net.Listen("tcp", ":8031")
-	fmt.Println("Server is listening on port", "8031")
+	fmt.Println("Broker is listening on port", "8031")
 	go func() {
 		<-killChan
 		// tell servers to close as well

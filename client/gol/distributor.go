@@ -128,6 +128,7 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 	pause := false
 	broker := brokerC.broker
 	call := brokerC.call
+	stopChan := make(chan struct{})
 	go func() {
 		for {
 			response := CellFlipResponse{}
@@ -135,11 +136,17 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 			if err != nil {
 				panic(err)
 			}
-			c.events <- CellsFlipped{
-				CompletedTurns: response.Turn,
-				Cells:          response.Cells,
+			select {
+			case <-stopChan:
+				return
+			default:
+				c.events <- CellsFlipped{
+					CompletedTurns: response.Turn,
+					Cells:          response.Cells,
+				}
+				c.events <- TurnComplete{CompletedTurns: response.Turn}
 			}
-			c.events <- TurnComplete{CompletedTurns: response.Turn}
+
 		}
 	}()
 	for {
@@ -157,6 +164,7 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 				CompletedTurns: brokerC.response.FinalTurns,
 				Filename:       filename,
 			}
+			close(stopChan)
 			return
 
 		case <-controlChan.quit:
@@ -224,6 +232,7 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 			c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: filename}
 		}
 	}
+
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
@@ -271,12 +280,15 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	brokerC.broker = broker
 	brokerC.call = call
 	brokerC.response = &response
+	finish := make(chan bool, 1)
+
 	handlingEvent(&controlChan, c, p, &brokerC)
-	//fmt.Println("Quit")
+	finish <- true
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle
+	fmt.Println("close")
 	c.events <- StateChange{turn, Quitting}
 	// Close the channel to stop the SDL goroutine gracefully. Removing may cause deadlock.
 	close(c.events)
