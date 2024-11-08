@@ -141,10 +141,12 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 		result[i] = make([]byte, p.ImageWidth)
 	}
 
-	//if p.Threads == 1 || p.ImageHeight/p.Threads < 4 {
-	if p.Threads > 0 {
+	if p.Threads == 1 || p.ImageHeight/p.Threads < 4 {
 		singleThreadWorker(world, result)
 	} else {
+		if p.Threads > 6 {
+			p.Threads = 6
+		}
 		interval := p.ImageHeight / p.Threads
 		results := make([]Result, p.Threads)
 		wg := sync.WaitGroup{}
@@ -164,26 +166,43 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 			go multiThreadWorker(world[startY:endY], results[i], startY, endY, &wg)
 		}
 		wg.Wait()
-		// combine results
-		//for i, r := range results {
-		//startY := interval * i
-		//endY := startY + interval
-		//if i == len(result)-1 {
-		//	endY = p.ImageHeight
-		//}
-		//for x := 0; x < p.ImageWidth; x++ {
-		//	result[(startY-1+p.ImageHeight)%p.ImageHeight][x] += r.up[x]
-		//	result[(endY+p.ImageHeight)%p.ImageHeight][x] += r.down[x]
-		//}
-		for y := 0; y < p.ImageHeight; y++ {
+		// combine up and down in result
+		for i, r := range results {
+			startY := interval * i
+			endY := startY + interval
+			if i == p.Threads-1 {
+				endY = p.ImageHeight
+			}
 			for x := 0; x < p.ImageWidth; x++ {
-				if result[y][x] == byte(3) || (result[y][x] == byte(2) && world[y][x] == byte(255)) {
-					result[y][x] = byte(255)
-				}
+				result[(startY-1+p.ImageHeight)%p.ImageHeight][x] += r.up[x]
+				result[(endY+p.ImageHeight)%p.ImageHeight][x] += r.down[x]
+			}
+		}
+		wg.Add(p.Threads)
+		for i := 0; i < p.Threads; i++ {
+			startY := interval * i
+			endY := startY + interval
+			if i == p.Threads-1 {
+				endY = p.ImageHeight
+			}
+			go func(startY, endY int) {
+				defer wg.Done()
+				evolution(world, result, startY, endY)
+			}(startY, endY)
+		}
+		wg.Wait()
+	}
+	return result
+}
+
+func evolution(world, result [][]byte, startY, endY int) {
+	for y := startY; y < endY; y++ {
+		for x := 0; x < len(world[0]); x++ {
+			if result[y][x] == byte(3) || result[y][x] == byte(2) && world[y][x] == byte(255) {
+				result[y][x] = byte(255)
 			}
 		}
 	}
-	return result
 }
 
 func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
@@ -320,7 +339,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	for index := 0; index < p.ImageHeight*p.ImageWidth; index++ {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
-	c.events <- CellsFlipped{0, checker(world, p)}
+	//c.events <- CellsFlipped{0, checker(world, p)}
 	c.events <- StateChange{turn, Executing}
 
 	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool, 1), time.NewTicker(2 * time.Second)}
