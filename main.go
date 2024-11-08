@@ -7,8 +7,6 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
-	"time"
-
 	"uk.ac.bris.cs/gameoflife/gol"
 	"uk.ac.bris.cs/gameoflife/sdl"
 )
@@ -39,7 +37,7 @@ func main() {
 	flag.IntVar(
 		&params.Turns,
 		"turns",
-		1000,
+		10000000000,
 		"Specify the number of turns to process. Defaults to 10000000000.")
 
 	headless := flag.Bool(
@@ -58,14 +56,12 @@ func main() {
 	events := make(chan gol.Event, 1000)
 
 	go sigterm(keyPresses)
-	start := time.Now()
 	go gol.Run(params, events, keyPresses)
 	if !(*headless) {
 		sdl.Run(params, events, keyPresses)
 	} else {
 		sdl.RunHeadless(events)
 	}
-	fmt.Printf("%-10v %v\n", "Elapsed", time.Since(start))
 }
 
 func sigterm(keyPresses chan<- rune) {

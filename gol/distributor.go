@@ -192,6 +192,7 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 		}
 		wg.Wait()
 	}
+	cellFlipHandling(world, result, p, c, turn)
 	return result
 }
 
@@ -339,32 +340,32 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	for index := 0; index < p.ImageHeight*p.ImageWidth; index++ {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
-	//c.events <- CellsFlipped{0, checker(world, p)}
+	c.events <- CellsFlipped{0, checker(world, p)}
 	c.events <- StateChange{turn, Executing}
 
 	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool, 1), time.NewTicker(2 * time.Second)}
 	// deal with keyboard input
 	go keyBoardDetection(keyPresses, controlChan)
-	//gameQuit := false
-	//finalTurns := p.Turns
+	gameQuit := false
+	finalTurns := p.Turns
 	// run evolution until end of turns
 	for i := 0; i < p.Turns; i++ {
 		world = centralDistributor(world, p, c, i)
 		c.events <- TurnComplete{i + 1}
-		//gameQuit = handlingEvent(world, i, &controlChan, c, &finalTurns, p)
-		//if gameQuit {
-		//	break
-		//}
+		gameQuit = handlingEvent(world, i, &controlChan, c, &finalTurns, p)
+		if gameQuit {
+			break
+		}
 	}
-	//filename = output(world, &c, p, finalTurns)
-	//waitOutputComplete(c)
-	//c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: filename}
-	c.events <- FinalTurnComplete{p.Turns, checker(world, p)}
+	filename = output(world, &c, p, finalTurns)
+	c.events <- FinalTurnComplete{finalTurns, checker(world, p)}
+	waitOutputComplete(c)
+	c.events <- ImageOutputComplete{CompletedTurns: finalTurns, Filename: filename}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle
-	c.events <- StateChange{turn, Quitting}
+	c.events <- StateChange{finalTurns, Quitting}
 	// Close the channel to stop the SDL goroutine gracefully. Removing may cause deadlock.
 	close(c.events)
 }
