@@ -81,9 +81,9 @@ func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 	return filename
 }
 
-func outputWithCells(cells []util.Cell, c *distributorChannels, p Params, turn int) string {
+func outputWithCells(cells []util.Cell, c *distributorChannels, p Params, turns int) string {
 	c.ioCommand <- ioOutput
-	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turn)
+	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turns)
 	c.ioFilename <- filename
 	// sort cells in order of Y and second order of X
 	sort.Slice(cells, func(i, j int) bool {
@@ -103,6 +103,7 @@ func outputWithCells(cells []util.Cell, c *distributorChannels, p Params, turn i
 			}
 		}
 	}
+	fmt.Println(turns)
 	return filename
 }
 
@@ -125,38 +126,46 @@ func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
 }
 
 func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params, brokerC *brokerCommunicate) {
+	var differentCells = make([]util.Cell, 0)
+	var turns = 0
+	var turnMutex sync.Mutex
+
 	pause := false
 	broker := brokerC.broker
 	call := brokerC.call
 	stopChan := make(chan struct{})
+	// function used in cellFlipping
 	go func() {
 		for {
-			response := CellFlipResponse{}
-			err := broker.Call("Operator.CellFlip", struct{}{}, &response)
-			//result := make([]util.Cell, len(response.Cells))
-			//copy(result, response.Cells)
-
-			if err != nil {
-				panic(err)
-			}
 			select {
 			case <-stopChan:
 				return
 			default:
 				c.events <- CellsFlipped{
-					CompletedTurns: response.Turn,
-					Cells:          response.Cells,
+					CompletedTurns: turns,
+					Cells:          differentCells,
 				}
-				c.events <- TurnComplete{CompletedTurns: response.Turn}
+				c.events <- TurnComplete{CompletedTurns: turns}
 			}
-
+			response := CellFlipResponse{}
+			err := broker.Call("Operator.CellFlip", struct{}{}, &response)
+			if err != nil {
+				panic(err)
+			}
+			turnMutex.Lock()
+			differentCells = make([]util.Cell, 0)
+			differentCells = append(differentCells, response.Cells...)
+			turns = response.Turn
+			turnMutex.Unlock()
 		}
 	}()
+	// main loop in controller
 	for {
 		select {
 		case <-call.Done:
 			// when broker is done
 			fmt.Println("Broker is done")
+			close(stopChan)
 			cells := brokerC.response.Cells
 			finalTurns := brokerC.response.FinalTurns
 			c.events <- FinalTurnComplete{finalTurns, cells}
@@ -167,21 +176,22 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 				CompletedTurns: brokerC.response.FinalTurns,
 				Filename:       filename,
 			}
-			close(stopChan)
+			c.ioCommand <- ioCheckIdle
+			<-c.ioIdle
+			c.events <- StateChange{finalTurns, Quitting}
 			return
 
 		case <-controlChan.quit:
-			fmt.Println("Quiting")
 			err := broker.Call("Operator.Quit", struct{}{}, &struct{}{})
 			if err != nil {
 				panic(err)
 			}
-			return
+
 		case <-controlChan.kill:
 			fmt.Println("Killing")
-			err := broker.Call("Operator.Kill", struct{}{}, &struct{}{})
+			err := broker.Call("Operator.Kill", struct{}{}, nil)
 			if err != nil {
-				return
+				panic(err)
 			}
 			return
 
@@ -192,10 +202,11 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 				panic(err)
 			}
 			c.events <- AliveCellsCount{CompletedTurns: response.Turn, CellsCount: response.AliveNum}
+
 		case <-controlChan.pause:
 			pause = !pause
 			if pause {
-				fmt.Println("Continuing")
+				fmt.Println("Pause")
 				response := PauseResponse{}
 				err := broker.Call("Operator.Pause", struct{}{}, &response)
 				if err != nil {
@@ -211,6 +222,7 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 				}
 				c.events <- StateChange{response.Turn, Executing}
 			}
+
 		case <-controlChan.save:
 			response := ResponseBroker{}
 			result := make([][]byte, p.ImageHeight)
@@ -283,16 +295,8 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	brokerC.broker = broker
 	brokerC.call = call
 	brokerC.response = &response
-	finish := make(chan bool, 1)
 
 	handlingEvent(&controlChan, c, p, &brokerC)
-	finish <- true
-
-	// Make sure that the Io has finished any output before exiting.
-	c.ioCommand <- ioCheckIdle
-	<-c.ioIdle
-	fmt.Println("close")
-	c.events <- StateChange{turn, Quitting}
 	// Close the channel to stop the SDL goroutine gracefully. Removing may cause deadlock.
 	close(c.events)
 }

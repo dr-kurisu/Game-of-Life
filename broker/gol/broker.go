@@ -51,7 +51,6 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 	}
 	// start working with evolution
 	for i := 0; i < request.P.Turns; i++ {
-
 		turn = i + 1
 		world = broker(world, clients, i, request.P)
 		turnComplete <- true
@@ -93,6 +92,7 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 		}
 	}
 	response.FinalTurns = finalTurns
+	resetParams()
 	return nil
 }
 
@@ -112,6 +112,7 @@ func (a *Operator) Pause(request NoParams, response *PauseResponse) error {
 
 func (a *Operator) Save(request NoParams, response *ResponseBroker) error {
 	saveChan <- true
+	response.FinalTurns = turn
 	world := <-worldChan
 	response.Cells = make([]util.Cell, 0)
 	for i := range world {
@@ -121,7 +122,6 @@ func (a *Operator) Save(request NoParams, response *ResponseBroker) error {
 			}
 		}
 	}
-	response.FinalTurns = turn
 	return nil
 }
 
@@ -142,6 +142,7 @@ func (a *Operator) Kill(request NoParams, response *NoParams) error {
 
 func (a *Operator) Quit(request NoParams, response *NoParams) error {
 	quitChan <- true
+	resetParams()
 	return nil
 }
 
@@ -176,6 +177,13 @@ func aliveCounter(world [][]byte, threads int) int {
 	}
 	wg.Wait()
 	return result
+}
+
+func resetParams() {
+	turn = 0
+	pause = false
+	differentCells = make([]util.Cell, 0)
+	clients = make([]*rpc.Client, 0)
 }
 
 func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte {
