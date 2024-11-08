@@ -32,13 +32,6 @@ func singleThreadWorker(world, result [][]byte) {
 			}
 		}
 	}
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			if result[y][x] == byte(3) || (result[y][x] == byte(2) && world[y][x] == byte(255)) {
-				result[y][x] = byte(255)
-			}
-		}
-	}
 }
 
 func checker(world [][]byte, p Params) []util.Cell {
@@ -75,12 +68,15 @@ func checker(world [][]byte, p Params) []util.Cell {
 }
 
 func centralDistributor(world [][]byte, p Params) [][]byte {
+	/*
+		Received y, x world return y + 2, x result
+	*/
 	p.Threads = 1
-	height := len(world)
+	height := len(world) + 2
 	width := len(world[0])
 
-	result := make([][]byte, height+2)
-	for i := 0; i < height+2; i++ {
+	result := make([][]byte, height)
+	for i := 0; i < height; i++ {
 		result[i] = make([]byte, width)
 	}
 	// wg used to control each thread
@@ -96,7 +92,6 @@ func (a *Operator) Kill(request NoParams, response *NoParams) error {
 func (a *Operator) DistributeWorker(request Request, response *Response) error {
 	world = centralDistributor(request.World, request.P)
 	// send world
-
 	response.World = make([][]byte, len(world))
 	for i := range world {
 		response.World[i] = make([]byte, len(world[i]))

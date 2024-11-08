@@ -229,7 +229,7 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 	for i := 0; i < height; i++ {
 		result[i] = make([]byte, width)
 	}
-
+	// Get Counting Matrix
 	wg := &sync.WaitGroup{}
 	wg.Add(len(clients))
 	responses := make([]Response, len(clients))
@@ -262,20 +262,32 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 				if kill {
 					return
 				} else {
-					panic(err)
+					err = client.Call("Operator.DistributeWorker", req, &responses[responseIndex])
+					if err != nil {
+						panic(err)
+					}
 				}
 			}
-			height := endY - startY + 2
+			height := endY - startY
 			resultMutex.Lock()
-			for y := 0; y < height; y++ {
+			for y := 0; y < height+2; y++ {
 				for x := 0; x < req.P.ImageWidth; x++ {
-					result[(y-1+startY+height)%height][x] = responses[responseIndex].World[y][x]
+					result[(y-1+startY+len(world))%len(world)][x] += responses[responseIndex].World[y][x]
 				}
 			}
 			resultMutex.Unlock()
 		}(client, request, i)
 	}
 	wg.Wait()
+	// evolution
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			if result[y][x] == byte(3) || (result[y][x] == byte(2) && world[y][x] == byte(255)) {
+				result[y][x] = byte(255)
+			}
+		}
+	}
+
 	// compare result and world
 	differentCells = make([]util.Cell, 0)
 	cellFlipHandling(world, result, p)
