@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"syscall"
+	"uk.ac.bris.cs/gameoflife/util"
 )
 
 type Operator struct{}
@@ -18,55 +19,72 @@ var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, 
 var killChan = make(chan bool)
 
 //these functions are used to simulate the turns of Game of Life
-func worker(partWorld [][]byte, partResult [][]byte, wg *sync.WaitGroup) {
-	defer wg.Done()
-	interval := len(partResult)
-	width := len(partResult[0])
-	for y := 0; y < interval; y++ {
+func singleThreadWorker(world, result [][]byte) {
+	height := len(world)
+	width := len(world[0])
+
+	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
-			for _, d := range dir {
-				if partWorld[y+d[0]+1][(x+d[1]+width)%width] == byte(255) {
-					partResult[y][x] += 1
+			if world[y][x] == byte(255) {
+				for _, d := range dir {
+					result[y+d[0]+1][(x+d[1]+width)%width] += 1
 				}
 			}
 		}
 	}
-	for y := 0; y < interval; y++ {
+	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
-			if partResult[y][x] == byte(3) || (partResult[y][x] == byte(2) && partWorld[y+1][x] == byte(255)) {
-				partResult[y][x] = byte(255)
+			if result[y][x] == byte(3) || (result[y][x] == byte(2) && world[y][x] == byte(255)) {
+				result[y][x] = byte(255)
 			}
 		}
 	}
 }
 
-func centralDistributor(world [][]byte, p Params, turn int) [][]byte {
+func checker(world [][]byte, p Params) []util.Cell {
+	result := make([]util.Cell, 0)
+	var mutex sync.Mutex
+	var wg sync.WaitGroup
+	yInterval := p.ImageHeight / p.Threads
+	ys := 0
+	ye := yInterval
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		if i == p.Threads-1 {
+			ye = p.ImageHeight
+		}
+		go func(ys, ye int) {
+			defer wg.Done()
+			localResult := make([]util.Cell, 0)
+			for y := ys; y < ye; y++ {
+				for x := 0; x < p.ImageWidth; x++ {
+					if world[y][x] == byte(255) {
+						localResult = append(localResult, util.Cell{X: x, Y: y})
+					}
+				}
+			}
+			mutex.Lock()
+			result = append(result, localResult...)
+			mutex.Unlock()
+		}(ys, ye)
+		ys += yInterval
+		ye += yInterval
+	}
+	wg.Wait()
+	return result
+}
+
+func centralDistributor(world [][]byte, p Params) [][]byte {
 	p.Threads = 1
-	height := len(world) - 2
+	height := len(world)
 	width := len(world[0])
 
-	yInterval := height / p.Threads
-
-	result := make([][]byte, height)
-	for i := 0; i < height; i++ {
+	result := make([][]byte, height+2)
+	for i := 0; i < height+2; i++ {
 		result[i] = make([]byte, width)
 	}
 	// wg used to control each thread
-	wg := sync.WaitGroup{}
-	wg.Add(p.Threads)
-	for i := 0; i < p.Threads; i++ {
-		startY := i * yInterval
-		endY := startY + yInterval
-		// deal with the last thread
-		if i == p.Threads-1 {
-			endY = height
-		}
-		partResult := result[startY:endY]
-		// deal with start and medium
-		go worker(world, partResult, &wg)
-		//cellFlipHandling(world, result, p, c, turn)
-	}
-	wg.Wait()
+	singleThreadWorker(world, result)
 	return result
 }
 
@@ -76,8 +94,9 @@ func (a *Operator) Kill(request NoParams, response *NoParams) error {
 }
 
 func (a *Operator) DistributeWorker(request Request, response *Response) error {
-	world = centralDistributor(request.World, request.P, request.Turn)
+	world = centralDistributor(request.World, request.P)
 	// send world
+
 	response.World = make([][]byte, len(world))
 	for i := range world {
 		response.World[i] = make([]byte, len(world[i]))
@@ -87,14 +106,14 @@ func (a *Operator) DistributeWorker(request Request, response *Response) error {
 }
 
 //It's the sever, used to listen and pass the argus to client by channel
-func server() {
+func server(port string) {
 	err := rpc.Register(&Operator{})
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	listener, _ := net.Listen("tcp", ":8030")
-	fmt.Println("Server is listening on port", "8030")
+	listener, _ := net.Listen("tcp", port)
+	fmt.Println("Server is listening on port", port)
 	go func() {
 		<-killChan
 		// simulate interrupt signal

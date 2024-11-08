@@ -103,7 +103,6 @@ func outputWithCells(cells []util.Cell, c *distributorChannels, p Params, turns 
 			}
 		}
 	}
-	fmt.Println(turns)
 	return filename
 }
 
@@ -191,7 +190,7 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 			fmt.Println("Killing")
 			err := broker.Call("Operator.Kill", struct{}{}, nil)
 			if err != nil {
-				panic(err)
+				return
 			}
 			return
 
@@ -268,8 +267,9 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	c.events <- CellsFlipped{0, checker(world, p)}
 
 	// define of ports
-	ports := make([]string, 1)
-	ports[0] = "localhost:8030" // Ip to be confirmed
+	ports := make([]string, 2)
+	ports[0] = "localhost:8030"
+	ports[1] = "localhost:8032"
 	// Send world to server
 	broker, err := rpc.Dial("tcp", "localhost:8031")
 	if err != nil {

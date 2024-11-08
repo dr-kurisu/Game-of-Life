@@ -20,6 +20,7 @@ var worldChan = make(chan [][]byte)
 var ticker = make(chan bool, 1)
 var comapreComplete = make(chan bool)
 var turnComplete = make(chan bool, 1)
+var worldMutex = sync.Mutex{}
 
 var pause = false
 var kill = false
@@ -186,10 +187,44 @@ func resetParams() {
 	clients = make([]*rpc.Client, 0)
 }
 
+func checker(world [][]byte, p Params) []util.Cell {
+	result := make([]util.Cell, 0)
+	var mutex sync.Mutex
+	var wg sync.WaitGroup
+	yInterval := p.ImageHeight / p.Threads
+	ys := 0
+	ye := yInterval
+	wg.Add(p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		if i == p.Threads-1 {
+			ye = p.ImageHeight
+		}
+		go func(ys, ye int) {
+			defer wg.Done()
+			localResult := make([]util.Cell, 0)
+			for y := ys; y < ye; y++ {
+				for x := 0; x < p.ImageWidth; x++ {
+					if world[y][x] == byte(255) {
+						localResult = append(localResult, util.Cell{X: x, Y: y})
+					}
+				}
+			}
+			mutex.Lock()
+			result = append(result, localResult...)
+			mutex.Unlock()
+		}(ys, ye)
+		ys += yInterval
+		ye += yInterval
+	}
+	wg.Wait()
+	return result
+}
+
 func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte {
 	yInterval := p.ImageHeight / len(clients)
 	height := len(world)
 	width := len(world[0])
+	resultMutex := &sync.Mutex{}
 	result := make([][]byte, height)
 	for i := 0; i < height; i++ {
 		result[i] = make([]byte, width)
@@ -197,25 +232,32 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 
 	wg := &sync.WaitGroup{}
 	wg.Add(len(clients))
+	responses := make([]Response, len(clients))
 	for i, client := range clients {
 		startY := i * yInterval
 		endY := startY + yInterval
 		if i == len(clients)-1 {
 			endY = height
 		}
+		newP := Params{
+			Turns:       p.Turns,
+			Threads:     p.Threads,
+			ImageWidth:  p.ImageWidth,
+			ImageHeight: endY - startY,
+		}
 		request := Request{
-			World: make([][]byte, 0),
+			World: make([][]byte, newP.ImageHeight),
 			Turn:  turn,
-			P:     p,
+			P:     newP,
 		}
-		for j := startY; j < endY+2; j++ {
-			request.World = append(request.World, world[(j-1+height)%height])
+		for y := startY; y < endY; y++ {
+			request.World[y-startY] = make([]byte, width)
+			copy(request.World[y-startY], world[y])
 		}
-		response := Response{}
-		client := client
-		go func() {
+		responses[i] = Response{}
+		go func(client *rpc.Client, req Request, responseIndex int) {
 			defer wg.Done()
-			err := client.Call("Operator.DistributeWorker", request, &response)
+			err := client.Call("Operator.DistributeWorker", req, &responses[responseIndex])
 			if err != nil {
 				if kill {
 					return
@@ -223,12 +265,15 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 					panic(err)
 				}
 			}
-			for j := 0; j < len(response.World); j++ {
-				for k := 0; k < len(response.World[j]); k++ {
-					result[j][k] = response.World[j][k]
+			height := endY - startY + 2
+			resultMutex.Lock()
+			for y := 0; y < height; y++ {
+				for x := 0; x < req.P.ImageWidth; x++ {
+					result[(y-1+startY+height)%height][x] = responses[responseIndex].World[y][x]
 				}
 			}
-		}()
+			resultMutex.Unlock()
+		}(client, request, i)
 	}
 	wg.Wait()
 	// compare result and world
