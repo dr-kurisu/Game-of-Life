@@ -3,13 +3,17 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/pprof"
 	"syscall"
 	"uk.ac.bris.cs/gameoflife/gol"
 	"uk.ac.bris.cs/gameoflife/sdl"
 )
+
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
 // main is the function called when starting Game of Life with 'go run .'
 func main() {
@@ -44,8 +48,18 @@ func main() {
 		"headless",
 		false,
 		"Disable the SDL window for running in a headless environment.")
-
 	flag.Parse()
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		err = pprof.StartCPUProfile(f)
+		if err != nil {
+			panic(err)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	fmt.Printf("%-10v %v\n", "Threads", params.Threads)
 	fmt.Printf("%-10v %v\n", "Width", params.ImageWidth)
