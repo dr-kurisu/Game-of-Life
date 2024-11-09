@@ -267,9 +267,9 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	c.events <- CellsFlipped{0, checker(world, p)}
 
 	// define of ports
-	ports := make([]string, 2)
-	ports[0] = "localhost:8033"
-	ports[1] = "localhost:8034"
+	ports := make([]string, 1)
+	ports[0] = "localhost:8030"
+	//ports[1] = "localhost:8034"
 	// Send world to server
 	broker, err := rpc.Dial("tcp", "localhost:8031")
 	if err != nil {
