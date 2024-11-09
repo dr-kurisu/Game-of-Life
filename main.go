@@ -3,9 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/pprof"
 	"syscall"
 	"time"
 
@@ -21,7 +23,7 @@ func main() {
 	flag.IntVar(
 		&params.Threads,
 		"t",
-		8,
+		1,
 		"Specify the number of worker threads to use. Defaults to 8.")
 
 	flag.IntVar(
@@ -39,7 +41,7 @@ func main() {
 	flag.IntVar(
 		&params.Turns,
 		"turns",
-		1000,
+		10000,
 		"Specify the number of turns to process. Defaults to 10000000000.")
 
 	headless := flag.Bool(
@@ -47,7 +49,16 @@ func main() {
 		false,
 		"Disable the SDL window for running in a headless environment.")
 
+	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	flag.Parse()
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 
 	fmt.Printf("%-10v %v\n", "Threads", params.Threads)
 	fmt.Printf("%-10v %v\n", "Width", params.ImageWidth)
