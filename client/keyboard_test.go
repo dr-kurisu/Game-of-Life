@@ -4,6 +4,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+
 	"uk.ac.bris.cs/gameoflife/gol"
 )
 

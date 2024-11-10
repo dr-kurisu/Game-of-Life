@@ -21,6 +21,7 @@ var ticker = make(chan bool, 1)
 var comapreComplete = make(chan bool)
 var turnComplete = make(chan bool, 1)
 var worldMutex = sync.Mutex{}
+var clientsMutex = sync.Mutex{}
 
 var pause = false
 var kill = false
@@ -184,7 +185,7 @@ func resetParams() {
 	turn = 0
 	pause = false
 	differentCells = make([]util.Cell, 0)
-	clients = make([]*rpc.Client, 0)
+	//clients = make([]*rpc.Client, 0)
 }
 
 func checker(world [][]byte, p Params) []util.Cell {
@@ -221,6 +222,7 @@ func checker(world [][]byte, p Params) []util.Cell {
 }
 
 func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte {
+
 	yInterval := p.ImageHeight / len(clients)
 	height := len(world)
 	width := len(world[0])
@@ -257,15 +259,26 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 		responses[i] = Response{}
 		go func(client *rpc.Client, req Request, responseIndex int) {
 			defer wg.Done()
-			err := client.Call("Operator.DistributeWorker", req, &responses[responseIndex])
-			if err != nil {
+			for i := 0; i < 3; i++ {
+				if client == nil {
+					fmt.Println("Client is nil")
+					return
+				}
+				if &responses[responseIndex] == nil {
+					fmt.Println("Request is nil")
+					return
+				}
+
+				err := client.Call("Operator.DistributeWorker", req, &responses[responseIndex])
+				if err == nil {
+					// 调用成功，退出循环
+					break
+				}
 				if kill {
 					return
-				} else {
-					err = client.Call("Operator.DistributeWorker", req, &responses[responseIndex])
-					if err != nil {
-						panic(err)
-					}
+				}
+				if i == 2 {
+					panic(err)
 				}
 			}
 			height := endY - startY

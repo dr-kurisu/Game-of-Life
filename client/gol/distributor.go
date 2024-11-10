@@ -133,6 +133,7 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 	broker := brokerC.broker
 	call := brokerC.call
 	stopChan := make(chan struct{})
+	quit := false
 	// function used in cellFlipping
 	go func() {
 		for {
@@ -163,7 +164,6 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 		select {
 		case <-call.Done:
 			// when broker is done
-			fmt.Println("Broker is done")
 			close(stopChan)
 			cells := brokerC.response.Cells
 			finalTurns := brokerC.response.FinalTurns
@@ -181,6 +181,7 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 			return
 
 		case <-controlChan.quit:
+			quit = true
 			err := broker.Call("Operator.Quit", struct{}{}, &struct{}{})
 			if err != nil {
 				panic(err)
@@ -195,6 +196,9 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 			return
 
 		case <-controlChan.ticker.C:
+			if quit {
+				break
+			}
 			response := TickerResponse{}
 			err := broker.Call("Operator.Ticker", struct{}{}, &response)
 			if err != nil {
@@ -223,6 +227,9 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 			}
 
 		case <-controlChan.save:
+			if quit {
+				break
+			}
 			response := ResponseBroker{}
 			result := make([][]byte, p.ImageHeight)
 			for y := 0; y < p.ImageHeight; y++ {
@@ -268,10 +275,14 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 
 	// define of ports
 	ports := make([]string, 2)
-	ports[0] = "localhost:8033"
-	ports[1] = "localhost:8034"
+	//ports[0] = "localhost:8030"
+	//ports[1] = "localhost:8032"
+	ports[0] = "184.73.51.147:8030"
+	ports[1] = "184.73.51.147:8032"
 	// Send world to server
-	broker, err := rpc.Dial("tcp", "localhost:8031")
+	// "localhost:8031" "184.73.51.147:8031"
+	brokerIP := "184.73.51.147:8031"
+	broker, err := rpc.Dial("tcp", brokerIP)
 	if err != nil {
 		panic(err)
 	}
