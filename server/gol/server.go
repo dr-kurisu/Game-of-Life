@@ -61,7 +61,7 @@ func multiThreadWorker(partWorld [][]byte, result Result, wg *sync.WaitGroup) {
 				if d[0] == 1 {
 					result.down[(x+d[1]+width)%width] += 1
 				} else {
-					result.result[height+d[0]][(x+d[1]+width)%width] += 1
+					result.result[height+d[0]-1][(x+d[1]+width)%width] += 1
 				}
 			}
 		}
@@ -71,7 +71,7 @@ func multiThreadWorker(partWorld [][]byte, result Result, wg *sync.WaitGroup) {
 		for x := 0; x < width; x++ {
 			if partWorld[y][x] == byte(255) {
 				for _, d := range dir {
-					result.result[y+d[0]+1][(x+d[1]+width)%width] += 1
+					result.result[y+d[0]][(x+d[1]+width)%width] += 1
 				}
 			}
 		}
@@ -82,7 +82,6 @@ func centralDistributor(world [][]byte, p Params) [][]byte {
 	/*
 		Received y, x world return y + 2, x result
 	*/
-	p.Threads = 1
 	height := len(world) + 2
 	width := len(world[0])
 
@@ -102,18 +101,18 @@ func centralDistributor(world [][]byte, p Params) [][]byte {
 		wg := sync.WaitGroup{}
 		wg.Add(p.Threads)
 		for i := 0; i < p.Threads; i++ {
-			startY := interval*i + 1
+			startY := interval * i
 			endY := startY + interval
 			if i == p.Threads-1 {
-				endY = p.ImageHeight + 1
+				endY = p.ImageHeight
 			}
 			// create efficient pointer for result
 			results[i] = Result{
-				result: result[startY:endY],
+				result: result[startY+1 : endY+1],
 				up:     make([]byte, p.ImageWidth),
 				down:   make([]byte, p.ImageWidth),
 			}
-			go multiThreadWorker(world[startY-1:endY-1], results[i], &wg)
+			go multiThreadWorker(world[startY:endY], results[i], &wg)
 		}
 		wg.Wait()
 		// combine up and down in result
@@ -124,8 +123,8 @@ func centralDistributor(world [][]byte, p Params) [][]byte {
 				endY = p.ImageHeight
 			}
 			for x := 0; x < p.ImageWidth; x++ {
-				result[(startY+p.ImageHeight)%p.ImageHeight][x] += r.up[x]
-				result[(endY+p.ImageHeight+1)%p.ImageHeight][x] += r.down[x]
+				result[startY][x] += r.up[x]
+				result[endY+1][x] += r.down[x]
 			}
 		}
 	}
