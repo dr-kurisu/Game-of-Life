@@ -197,10 +197,11 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 }
 
 func evolution(world, result [][]byte, startY, endY int) {
-	for y := startY; y < endY; y++ {
+	tempResult := result[startY:endY]
+	for y := 0; y < endY-startY; y++ {
 		for x := 0; x < len(world[0]); x++ {
-			if result[y][x] == byte(3) || result[y][x] == byte(2) && world[y][x] == byte(255) {
-				result[y][x] = byte(255)
+			if tempResult[y][x] == byte(3) || tempResult[y][x] == byte(2) && world[y+startY][x] == byte(255) {
+				tempResult[y][x] = byte(255)
 			}
 		}
 	}
