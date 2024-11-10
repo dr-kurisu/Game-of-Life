@@ -54,9 +54,11 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 	// start working with evolution
 	for i := 0; i < request.P.Turns; i++ {
 		turn = i + 1
+		//main action about evolution in broker function
 		world = broker(world, clients, i, request.P)
 		turnComplete <- true
 		<-comapreComplete
+		//detect key press channel
 		for {
 			select {
 			case <-ticker:
@@ -85,6 +87,7 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 			break
 		}
 	}
+	//init response cell
 	response.Cells = make([]util.Cell, 0)
 	for i := range world {
 		for j := range world[i] {
@@ -98,6 +101,7 @@ func (a *Operator) BrokerWorker(request RequestBroker, response *ResponseBroker)
 	return nil
 }
 
+// deal with cellflip event
 func (a *Operator) CellFlip(request NoParams, response *CellFlipResponse) error {
 	<-turnComplete
 	response.Turn = turn
@@ -106,12 +110,14 @@ func (a *Operator) CellFlip(request NoParams, response *CellFlipResponse) error 
 	return nil
 }
 
+// deal with pause event
 func (a *Operator) Pause(request NoParams, response *PauseResponse) error {
 	pauseChan <- pause
 	response.Turn = turn
 	return nil
 }
 
+// deal with save event
 func (a *Operator) Save(request NoParams, response *ResponseBroker) error {
 	saveChan <- true
 	response.FinalTurns = turn
@@ -127,6 +133,7 @@ func (a *Operator) Save(request NoParams, response *ResponseBroker) error {
 	return nil
 }
 
+// deal with ticker event
 func (a *Operator) Ticker(request NoParams, response *TickerResponse) error {
 	ticker <- true
 	response.Turn = turn
@@ -136,18 +143,21 @@ func (a *Operator) Ticker(request NoParams, response *TickerResponse) error {
 	return nil
 }
 
+// deal with kill events
 func (a *Operator) Kill(request NoParams, response *NoParams) error {
 	killChan <- true
 	kill = true
 	return nil
 }
 
+// deal with exit event
 func (a *Operator) Quit(request NoParams, response *NoParams) error {
 	quitChan <- true
 	resetParams()
 	return nil
 }
 
+// count the number of alive cell (used to ticker event)
 func aliveCounter(world [][]byte, threads int) int {
 	result := 0
 	var mutex sync.Mutex
@@ -181,6 +191,7 @@ func aliveCounter(world [][]byte, threads int) int {
 	return result
 }
 
+// reset argument
 func resetParams() {
 	turn = 0
 	pause = false
@@ -221,6 +232,7 @@ func checker(world [][]byte, p Params) []util.Cell {
 	return result
 }
 
+// main action about evolution
 func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte {
 
 	yInterval := p.ImageHeight / len(clients)
@@ -268,7 +280,7 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 					fmt.Println("Request is nil")
 					return
 				}
-
+				// communicate with server
 				err := client.Call("Operator.DistributeWorker", req, &responses[responseIndex])
 				if err == nil {
 					// 调用成功，退出循环
@@ -292,7 +304,7 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 		}(client, request, i)
 	}
 	wg.Wait()
-	// evolution
+	// evolution (not create new 2d array to store result, just use the result [][] to store new world)
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			if result[y][x] == byte(3) || (result[y][x] == byte(2) && world[y][x] == byte(255)) {
@@ -307,6 +319,7 @@ func broker(world [][]byte, clients []*rpc.Client, turn int, p Params) [][]byte 
 	return result
 }
 
+// collect alive cell and prepare send cellflip event for each alive cell
 func cellFlipHandling(world [][]byte, result [][]byte, p Params) {
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
@@ -317,6 +330,7 @@ func cellFlipHandling(world [][]byte, result [][]byte, p Params) {
 	}
 }
 
+// conection with server
 func server() {
 	err := rpc.Register(&Operator{})
 	if err != nil {
@@ -325,6 +339,7 @@ func server() {
 	}
 	listener, _ := net.Listen("tcp", ":8031")
 	fmt.Println("Broker is listening on port", "8031")
+	//deal with k keypress
 	go func() {
 		<-killChan
 		// tell servers to close as well

@@ -32,6 +32,7 @@ type brokerCommunicate struct {
 	response *ResponseBroker
 }
 
+// find alive cells in world
 func checker(world [][]byte, p Params) []util.Cell {
 	result := make([]util.Cell, 0)
 	var mutex sync.Mutex
@@ -40,6 +41,7 @@ func checker(world [][]byte, p Params) []util.Cell {
 	ys := 0
 	ye := yInterval
 	wg.Add(p.Threads)
+	//multiple thread application
 	for i := 0; i < p.Threads; i++ {
 		if i == p.Threads-1 {
 			ye = p.ImageHeight
@@ -54,6 +56,7 @@ func checker(world [][]byte, p Params) []util.Cell {
 					}
 				}
 			}
+			//prevent race condition
 			mutex.Lock()
 			result = append(result, localResult...)
 			mutex.Unlock()
@@ -65,6 +68,7 @@ func checker(world [][]byte, p Params) []util.Cell {
 	return result
 }
 
+// output result as pgm file
 func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 	c.ioCommand <- ioOutput
 	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turn)
@@ -81,6 +85,7 @@ func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 	return filename
 }
 
+// outputs the cell states to a file, organise by Y (then X) and send pixel values to channel.
 func outputWithCells(cells []util.Cell, c *distributorChannels, p Params, turns int) string {
 	c.ioCommand <- ioOutput
 	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turns)
@@ -134,6 +139,7 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 	call := brokerC.call
 	stopChan := make(chan struct{})
 	quit := false
+	//client send command and the actual work is broker to do
 	// function used in cellFlipping
 	go func() {
 		for {
@@ -160,6 +166,7 @@ func handlingEvent(controlChan *controlChannels, c distributorChannels, p Params
 		}
 	}()
 	// main loop in controller
+	//handling keypress events and Ticker and broker done
 	for {
 		select {
 		case <-call.Done:
@@ -293,7 +300,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	c.events <- StateChange{turn, Executing}
 	controlChan := controlChannels{make(chan bool, 1), make(chan bool, 1), make(chan bool), make(chan bool), time.NewTicker(2 * time.Second)}
 	go keyBoardDetection(keyPresses, controlChan)
-
+	//send this data that broker need when working
 	request := RequestBroker{
 		Cells: checker(world, p),
 		Ports: ports,

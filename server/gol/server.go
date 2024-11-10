@@ -23,7 +23,8 @@ var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, 
 
 var killChan = make(chan bool)
 
-//these functions are used to simulate the turns of Game of Life
+// these functions are used to simulate the turns of Game of Life
+// single thread to detect surround point whether it is alive or die
 func singleThreadWorker(world, result [][]byte) {
 	height := len(world)
 	width := len(world[0])
@@ -38,6 +39,7 @@ func singleThreadWorker(world, result [][]byte) {
 	}
 }
 
+// multiple thread to detect surround point whether it is alive or die
 func multiThreadWorker(partWorld [][]byte, result Result, wg *sync.WaitGroup) {
 	defer wg.Done()
 	width := len(partWorld[0])
@@ -89,7 +91,7 @@ func centralDistributor(world [][]byte, p Params) [][]byte {
 	for i := 0; i < height; i++ {
 		result[i] = make([]byte, width)
 	}
-
+	//according to the number of thread to choose method
 	if p.Threads == 1 || p.ImageHeight/p.Threads < 4 {
 		singleThreadWorker(world, result)
 	} else {
@@ -136,6 +138,7 @@ func (a *Operator) Kill(request NoParams, response *NoParams) error {
 	return nil
 }
 
+// get counting matrix
 func (a *Operator) DistributeWorker(request Request, response *Response) error {
 	world = centralDistributor(request.World, request.P)
 	// send world
@@ -147,7 +150,7 @@ func (a *Operator) DistributeWorker(request Request, response *Response) error {
 	return nil
 }
 
-//It's the sever, used to listen and pass the argus to client by channel
+// It's the sever, used to listen and pass the argus to client by channel
 func server(port string) {
 	err := rpc.Register(&Operator{})
 	if err != nil {
