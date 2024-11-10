@@ -29,8 +29,10 @@ type Result struct {
 	down   []byte
 }
 
+// use this data to detect surround point
 var dir = [][]int{{1, 0}, {-1, 0}, {-1, -1}, {1, 1}, {0, -1}, {1, -1}, {-1, 1}, {0, 1}}
 
+// single thread method to count the number of alive cell and process evolution
 func singleThreadWorker(world, result [][]byte) {
 	height := len(world)
 	width := len(world[0])
@@ -52,6 +54,7 @@ func singleThreadWorker(world, result [][]byte) {
 	}
 }
 
+// multiple  thread method to count the number of alive cell
 func multiThreadWorker(partWorld [][]byte, result Result, startY, endY int, wg *sync.WaitGroup) {
 	defer wg.Done()
 	width := len(partWorld[0])
@@ -108,6 +111,7 @@ func keyBoardDetection(keyPresses <-chan rune, controlChan controlChannels) {
 	}
 }
 
+// sending cellflip event if this cell was fliped
 func cellFlipHandling(world [][]byte, result [][]byte, p Params, c distributorChannels, turn int) {
 	var wg sync.WaitGroup
 	yInterval := p.ImageHeight / p.Threads
@@ -134,6 +138,7 @@ func cellFlipHandling(world [][]byte, result [][]byte, p Params, c distributorCh
 	wg.Wait()
 }
 
+// according to the number of thread to choose which method to use
 func centralDistributor(world [][]byte, p Params, c distributorChannels, turn int) [][]byte {
 	//yInterval := p.ImageHeight / p.Threads
 	result := make([][]byte, p.ImageHeight)
@@ -196,6 +201,7 @@ func centralDistributor(world [][]byte, p Params, c distributorChannels, turn in
 	return result
 }
 
+// according to the rule to process evolution
 func evolution(world, result [][]byte, startY, endY int) {
 	tempResult := result[startY:endY]
 	for y := 0; y < endY-startY; y++ {
@@ -207,6 +213,7 @@ func evolution(world, result [][]byte, startY, endY int) {
 	}
 }
 
+// write the output in a pgm file
 func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 	c.ioCommand <- ioOutput
 	filename := fmt.Sprintf("%dx%dx%d", p.ImageWidth, p.ImageHeight, turn)
@@ -223,11 +230,13 @@ func output(world [][]byte, c *distributorChannels, p Params, turn int) string {
 	return filename
 }
 
+// guarantee finish the imageoutput before sending quitting event
 func waitOutputComplete(c distributorChannels) {
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle
 }
 
+// handing key press event and ticker
 func handlingEvent(world [][]byte, round int, controlChan *controlChannels, c distributorChannels, finalTurns *int, p Params) bool {
 	quit := true
 	pause := false
@@ -261,6 +270,7 @@ func handlingEvent(world [][]byte, round int, controlChan *controlChannels, c di
 	return false
 }
 
+// count the number of alive cell(user to ticker )
 func aliveCounter(world [][]byte, p Params) int {
 	result := 0
 	var mutex sync.Mutex
@@ -294,6 +304,7 @@ func aliveCounter(world [][]byte, p Params) int {
 	return result
 }
 
+// collect alive cell(used to cellflip event)
 func checker(world [][]byte, p Params) []util.Cell {
 	result := make([]util.Cell, 0)
 	var mutex sync.Mutex
@@ -316,6 +327,7 @@ func checker(world [][]byte, p Params) []util.Cell {
 					}
 				}
 			}
+			//prevent race condition
 			mutex.Lock()
 			result = append(result, localResult...)
 			mutex.Unlock()
@@ -337,7 +349,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	c.ioCommand <- ioInput
 	filename := fmt.Sprintf("%dx%d", p.ImageWidth, p.ImageHeight)
 	c.ioFilename <- filename
-
+	//asign the input in world
 	for index := 0; index < p.ImageHeight*p.ImageWidth; index++ {
 		world[index/p.ImageWidth][index%p.ImageWidth] = <-c.ioInput
 	}
